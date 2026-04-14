@@ -3,7 +3,7 @@ name: Deploy to Cloud Run
 on:
   push:
     branches: [main]
-  workflow_dispatch:      # allows manual trigger from GitHub UI
+  workflow_dispatch:
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -20,10 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write      # required for Workload Identity Federation
+      id-token: write
 
     outputs:
       url: ${{ steps.get-url.outputs.url }}
+      image: ${{ steps.build.outputs.image }}
 
     steps:
       - uses: actions/checkout@v4
@@ -41,17 +42,18 @@ jobs:
         run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
 
       - name: Build & push backend image
+        id: build
         working-directory: backend
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/backend:${{ github.sha }}"
-          docker build -t $IMAGE .
-          docker push $IMAGE
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          IMAGE="${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/backend:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
-      - name: Deploy backend to Cloud Run
+      - name: Deploy to Cloud Run
         run: |
           gcloud run deploy ${{ env.BACKEND_SERVICE }} \
-            --image ${{ env.IMAGE }} \
+            --image "${{ steps.build.outputs.image }}" \
             --platform managed \
             --region ${{ env.REGION }} \
             --allow-unauthenticated \
@@ -59,8 +61,7 @@ jobs:
             --cpu 2 \
             --concurrency 80 \
             --max-instances 10 \
-            --set-env-vars "GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }}" \
-            --set-env-vars "ENVIRONMENT=production" \
+            --set-env-vars "GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }},ENVIRONMENT=production" \
             --set-secrets "GEMINI_API_KEY=fairlens-gemini-key:latest" \
             --quiet
 
@@ -69,9 +70,9 @@ jobs:
         run: |
           URL=$(gcloud run services describe ${{ env.BACKEND_SERVICE }} \
             --region ${{ env.REGION }} \
-            --format='value(status.url)')
+            --format="value(status.url)")
           echo "url=$URL" >> $GITHUB_OUTPUT
-          echo "✅ Backend: $URL"
+          echo "✅ Backend deployed: $URL"
 
   # ── Deploy Frontend ────────────────────────────────────────────────────────
   deploy-frontend:
@@ -98,30 +99,32 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          # No cache: line — avoids crash when package-lock.json is missing
 
-      - name: Build frontend with backend URL baked in
+      - name: Install and build frontend
         working-directory: frontend
+        env:
+          VITE_API_BASE_URL: ${{ needs.deploy-backend.outputs.url }}
         run: |
-          npm ci
-          VITE_API_BASE_URL="${{ needs.deploy-backend.outputs.url }}" npm run build
+          npm install
+          npm run build
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
 
       - name: Build & push frontend image
+        id: build
         working-directory: frontend
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/frontend:${{ github.sha }}"
-          docker build -t $IMAGE .
-          docker push $IMAGE
-          echo "FRONTEND_IMAGE=$IMAGE" >> $GITHUB_ENV
+          IMAGE="${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/frontend:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
-      - name: Deploy frontend to Cloud Run
+      - name: Deploy to Cloud Run
         run: |
           gcloud run deploy ${{ env.FRONTEND_SERVICE }} \
-            --image ${{ env.FRONTEND_IMAGE }} \
+            --image "${{ steps.build.outputs.image }}" \
             --platform managed \
             --region ${{ env.REGION }} \
             --allow-unauthenticated \
@@ -133,24 +136,11 @@ jobs:
         run: |
           URL=$(gcloud run services describe ${{ env.FRONTEND_SERVICE }} \
             --region ${{ env.REGION }} \
-            --format='value(status.url)')
-          echo "✅ FairLens live at: $URL"
-
-  # ── Summary ────────────────────────────────────────────────────────────────
-  summary:
-    name: Deployment summary
-    runs-on: ubuntu-latest
-    needs: [deploy-backend, deploy-frontend]
-    if: always()
-    steps:
-      - name: Write summary
-        run: |
-          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| | |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Backend | ${{ needs.deploy-backend.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Frontend | ${{ needs.deploy-frontend.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Backend URL | ${{ needs.deploy-backend.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
+            --format="value(status.url)")
+          echo "✅ FairLens frontend live at: $URL"
+          echo "## ✅ FairLens Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend | $URL |" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend | ${{ needs.deploy-backend.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| API Docs | ${{ needs.deploy-backend.outputs.url }}/docs |" >> $GITHUB_STEP_SUMMARY
