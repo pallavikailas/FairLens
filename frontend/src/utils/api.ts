@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 const BASE = import.meta.env.VITE_API_BASE_URL || ''
 
 export type ModelType = 'sklearn' | 'api' | 'huggingface' | 'vertex_ai'
