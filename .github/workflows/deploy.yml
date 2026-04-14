@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   REGION: us-central1
   REGISTRY: us-central1-docker.pkg.dev
   REPOSITORY: fairlens
@@ -14,7 +13,6 @@ env:
   FRONTEND_SERVICE: fairlens-frontend
 
 jobs:
-  # ── Deploy Backend ─────────────────────────────────────────────────────────
   deploy-backend:
     name: Deploy Backend → Cloud Run
     runs-on: ubuntu-latest
@@ -24,22 +22,26 @@ jobs:
 
     outputs:
       url: ${{ steps.get-url.outputs.url }}
-      image: ${{ steps.build.outputs.image }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
+        id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+      - name: Docker login to Artifact Registry
+        run: |
+          echo "${{ steps.auth.outputs.access_token }}" | \
+          docker login -u oauth2accesstoken --password-stdin \
+          https://${{ env.REGISTRY }}
 
       - name: Build & push backend image
         id: build
@@ -72,9 +74,8 @@ jobs:
             --region ${{ env.REGION }} \
             --format="value(status.url)")
           echo "url=$URL" >> $GITHUB_OUTPUT
-          echo "✅ Backend deployed: $URL"
+          echo "✅ Backend: $URL"
 
-  # ── Deploy Frontend ────────────────────────────────────────────────────────
   deploy-frontend:
     name: Deploy Frontend → Cloud Run
     runs-on: ubuntu-latest
@@ -87,10 +88,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
+        id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -99,7 +102,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          # No cache: line — avoids crash when package-lock.json is missing
 
       - name: Install and build frontend
         working-directory: frontend
@@ -109,8 +111,11 @@ jobs:
           npm install
           npm run build
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+      - name: Docker login to Artifact Registry
+        run: |
+          echo "${{ steps.auth.outputs.access_token }}" | \
+          docker login -u oauth2accesstoken --password-stdin \
+          https://${{ env.REGISTRY }}
 
       - name: Build & push frontend image
         id: build
@@ -132,15 +137,15 @@ jobs:
             --cpu 1 \
             --quiet
 
-      - name: Print live URL
+      - name: Print live URLs
         run: |
           URL=$(gcloud run services describe ${{ env.FRONTEND_SERVICE }} \
             --region ${{ env.REGION }} \
             --format="value(status.url)")
-          echo "✅ FairLens frontend live at: $URL"
-          echo "## ✅ FairLens Deployed" >> $GITHUB_STEP_SUMMARY
-          echo "| Service | URL |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Frontend: $URL"
+          echo "## 🚀 FairLens Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Frontend | $URL |" >> $GITHUB_STEP_SUMMARY
           echo "| Backend | ${{ needs.deploy-backend.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
           echo "| API Docs | ${{ needs.deploy-backend.outputs.url }}/docs |" >> $GITHUB_STEP_SUMMARY
