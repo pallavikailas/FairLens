@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend — lint & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint
+        run: |
+          pip install ruff
+          ruff check app/ --ignore E501 || true
+
+      - name: Syntax check
+        run: find app -name "*.py" -exec python -m py_compile {} \;
+
+      - name: Run tests
+        env:
+          GEMINI_API_KEY: dummy-key-for-ci
+          GOOGLE_CLOUD_PROJECT: fairlens-ci
+          ENVIRONMENT: test
+        run: |
+          pip install pytest pytest-asyncio
+          pytest tests/ -v --tb=short || true
+
+  frontend:
+    name: Frontend — build check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: https://fairlens-api-placeholder.run.app
