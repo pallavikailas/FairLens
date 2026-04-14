@@ -136,7 +136,7 @@ export default function RedTeamPage() {
   }, [allLogs])
 
   const startRedTeam = () => {
-    if (!store.modelFile || !store.datasetFile || store.confirmedBiases.length === 0) return
+    if (!store.datasetFile || store.confirmedBiases.length === 0) return
     setRunning(true)
     setStarted(true)
     setEvents([])
@@ -151,7 +151,6 @@ export default function RedTeamPage() {
     }
 
     const stop = streamRedTeam(
-      store.modelFile,
       store.datasetFile,
       store.protectedCols,
       store.targetCol,
