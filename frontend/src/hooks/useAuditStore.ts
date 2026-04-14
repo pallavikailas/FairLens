@@ -1,9 +1,8 @@
 import { create } from 'zustand'
-import type { ModelConfig } from '../utils/api'
 
 export interface AuditSession {
   auditId: string | null
-  modelConfig: ModelConfig
+  modelFile: File | null
   datasetFile: File | null
   protectedCols: string[]
   targetCol: string
@@ -18,7 +17,7 @@ export interface AuditSession {
 }
 
 interface AuditStore extends AuditSession {
-  setModelConfig: (cfg: Partial<ModelConfig>) => void
+  setModelFile: (f: File | null) => void
   setDatasetFile: (f: File | null) => void
   setProtectedCols: (cols: string[]) => void
   setTargetCol: (col: string) => void
@@ -33,11 +32,9 @@ interface AuditStore extends AuditSession {
   reset: () => void
 }
 
-const defaultModelConfig: ModelConfig = { modelType: 'sklearn' }
-
 const initial: AuditSession = {
   auditId: null,
-  modelConfig: defaultModelConfig,
+  modelFile: null,
   datasetFile: null,
   protectedCols: [],
   targetCol: '',
@@ -53,7 +50,7 @@ const initial: AuditSession = {
 
 export const useAuditStore = create<AuditStore>((set) => ({
   ...initial,
-  setModelConfig: (cfg) => set((s) => ({ modelConfig: { ...s.modelConfig, ...cfg } })),
+  setModelFile: (modelFile) => set({ modelFile }),
   setDatasetFile: (datasetFile) => set({ datasetFile }),
   setProtectedCols: (protectedCols) => set({ protectedCols }),
   setTargetCol: (targetCol) => set({ targetCol }),
