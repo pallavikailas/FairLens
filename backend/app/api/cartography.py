@@ -36,13 +36,38 @@ async def _load_csv(
 
     elif dataset_source == 'huggingface' and dataset_url:
         name = dataset_url.strip()
-        api_url = f"https://datasets-server.huggingface.co/rows?dataset={name}&config=default&split=train&offset=0&length=300"
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(api_url)
-            data = resp.json()
+
+            # Step 1: discover available configs and splits
+            info_resp = await client.get(
+                f"https://datasets-server.huggingface.co/info?dataset={name}"
+            )
+            config = "default"
+            split = "train"
+            if info_resp.status_code == 200:
+                info = info_resp.json()
+                configs = list(info.get("dataset_info", {}).keys())
+                if configs:
+                    config = configs[0]
+                splits = list(info.get("dataset_info", {}).get(config, {}).get("splits", {}).keys())
+                if splits:
+                    split = splits[0]
+
+            # Step 2: fetch rows
+            rows_resp = await client.get(
+                f"https://datasets-server.huggingface.co/rows"
+                f"?dataset={name}&config={config}&split={split}&offset=0&length=300"
+            )
+            if rows_resp.status_code != 200:
+                raise HTTPException(400,
+                    f"Could not load HuggingFace dataset '{name}'. "
+                    f"Status: {rows_resp.status_code}. "
+                    f"Try downloading the CSV directly from huggingface.co/datasets/{name} and uploading it."
+                )
+            data = rows_resp.json()
             rows = data.get("rows", [])
             if not rows:
-                raise HTTPException(400, f"Could not load HuggingFace dataset '{name}'")
+                raise HTTPException(400, f"HuggingFace dataset '{name}' returned no rows.")
             return pd.DataFrame([r["row"] for r in rows])
 
     elif dataset_source == 'kaggle':
