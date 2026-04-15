@@ -226,7 +226,7 @@ Generate a Counterfactual Constitution document with exactly these sections:
 
 ## 2. Implicit Decision Rules
 (List the model's apparent rules as plain-English "IF...THEN" statements derived from counterfactual evidence.
-E.g. "IF applicant is male THEN approval probability increases by ~{X}% independent of qualifications")
+E.g. "IF applicant is male THEN approval probability increases by ~{{X}}% independent of qualifications")
 
 ## 3. Demographic Sensitivity Index
 (For each protected attribute: flip rate, probability shift, severity, and plain-English explanation
