@@ -5,7 +5,6 @@
 [![CI](https://github.com/pallavikailas/fairlens/actions/workflows/ci.yml/badge.svg)](https://github.com/pallavikailas/fairlens/actions/workflows/ci.yml)
 [![Deploy](https://github.com/pallavikailas/fairlens/actions/workflows/deploy.yml/badge.svg)](https://github.com/pallavikailas/fairlens/actions/workflows/deploy.yml)
 [![Google Solution Challenge 2026](https://img.shields.io/badge/Google%20Solution%20Challenge-2026-4285F4?logo=google)](https://developers.google.com/community/gdsc-solution-challenge)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![SDG 10](https://img.shields.io/badge/UN%20SDG-10%20Reduced%20Inequalities-E5243B)](https://sdgs.un.org/goals/goal10)
 [![SDG 16](https://img.shields.io/badge/UN%20SDG-16%20Justice-00689D)](https://sdgs.un.org/goals/goal16)
 
@@ -181,7 +180,7 @@ flowchart TD
 
 ```bash
 # 1. Clone
-git clone https://github.com/yourusername/fairlens.git
+git clone https://github.com/pallavikailas/fairlens.git
 cd fairlens
 
 # 2. Backend
@@ -299,12 +298,6 @@ That's it. The adapter pattern means FairLens never needs to know what your mode
 | Google AI Used | Gemini 1.5 Pro via Vertex AI |
 | GCP Services | Cloud Run · Vertex AI · BigQuery · Cloud Storage · Artifact Registry · Secret Manager |
 | Deployed | `gcloud run deploy` via GitHub Actions on every push to `main` |
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE)
 
 ---
 
