@@ -36,39 +36,57 @@ async def _load_csv(
 
     elif dataset_source == 'huggingface' and dataset_url:
         name = dataset_url.strip()
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
 
-            # Step 1: discover available configs and splits
-            info_resp = await client.get(
-                f"https://datasets-server.huggingface.co/info?dataset={name}"
+            # Try the datasets-server API with splits discovery
+            splits_resp = await client.get(
+                f"https://datasets-server.huggingface.co/splits?dataset={name}"
             )
-            config = "default"
-            split = "train"
-            if info_resp.status_code == 200:
-                info = info_resp.json()
-                configs = list(info.get("dataset_info", {}).keys())
-                if configs:
-                    config = configs[0]
-                splits = list(info.get("dataset_info", {}).get(config, {}).get("splits", {}).keys())
+            if splits_resp.status_code == 200:
+                splits_data = splits_resp.json()
+                splits = splits_data.get("splits", [])
                 if splits:
-                    split = splits[0]
+                    first = splits[0]
+                    config = first.get("config", "default")
+                    split = first.get("split", "train")
+                    rows_resp = await client.get(
+                        f"https://datasets-server.huggingface.co/rows"
+                        f"?dataset={name}&config={config}&split={split}&offset=0&length=300"
+                    )
+                    if rows_resp.status_code == 200:
+                        data = rows_resp.json()
+                        rows = data.get("rows", [])
+                        if rows:
+                            return pd.DataFrame([r["row"] for r in rows])
 
-            # Step 2: fetch rows
-            rows_resp = await client.get(
-                f"https://datasets-server.huggingface.co/rows"
-                f"?dataset={name}&config={config}&split={split}&offset=0&length=300"
+            # Fallback: try to download parquet file directly from HuggingFace Hub
+            parquet_resp = await client.get(
+                f"https://huggingface.co/api/datasets/{name}/parquet"
             )
-            if rows_resp.status_code != 200:
-                raise HTTPException(400,
-                    f"Could not load HuggingFace dataset '{name}'. "
-                    f"Status: {rows_resp.status_code}. "
-                    f"Try downloading the CSV directly from huggingface.co/datasets/{name} and uploading it."
-                )
-            data = rows_resp.json()
-            rows = data.get("rows", [])
-            if not rows:
-                raise HTTPException(400, f"HuggingFace dataset '{name}' returned no rows.")
-            return pd.DataFrame([r["row"] for r in rows])
+            if parquet_resp.status_code == 200:
+                parquet_info = parquet_resp.json()
+                # Get first available parquet URL
+                for split_name, configs in parquet_info.items():
+                    for config_name, files in configs.items() if isinstance(configs, dict) else [("default", configs)]:
+                        file_list = files if isinstance(files, list) else [files]
+                        for pf in file_list[:1]:
+                            url = pf if isinstance(pf, str) else pf.get("url", "")
+                            if url:
+                                pq_resp = await client.get(url)
+                                if pq_resp.status_code == 200:
+                                    import pyarrow.parquet as pq
+                                    import pyarrow as pa
+                                    import io as _io
+                                    buf = _io.BytesIO(pq_resp.content)
+                                    table = pq.read_table(buf)
+                                    return table.to_pandas().head(300)
+
+            raise HTTPException(400,
+                f"Could not load '{name}' from HuggingFace. "
+                f"Please download the dataset CSV from "
+                f"https://huggingface.co/datasets/{name}/tree/main "
+                f"and upload it using the 'Upload CSV' option instead."
+            )
 
     elif dataset_source == 'kaggle':
         raise HTTPException(400,
@@ -157,6 +175,16 @@ async def analyze_bias_cartography(
             # No model — use target column as predictions
             model = _DatasetOnlyModel(y_true)
             y_pred = y_true.copy()
+
+        # Cap rows to avoid UMAP memory/reshape errors (UMAP works best under 3000 rows)
+        MAX_ROWS = 3000
+        if len(X) > MAX_ROWS:
+            idx = np.random.choice(len(X), MAX_ROWS, replace=False)
+            X = X.iloc[idx].reset_index(drop=True)
+            y_pred = y_pred[idx]
+            y_true = y_true[idx]
+            if not (model_file and model_file.filename):
+                model = _DatasetOnlyModel(y_true)
 
         # 4. Run cartography
         result = await cartography_service.run_cartography(
