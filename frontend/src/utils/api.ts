@@ -3,15 +3,17 @@ const BASE = import.meta.env.VITE_API_BASE_URL || ''
 
 export async function runCartography(
   modelFile: File | null,
-  datasetFile: File,
+  datasetFile: File | null,
   protectedCols: string[],
   targetCol: string,
+  extra?: Record<string, string>,
 ): Promise<any> {
   const fd = new FormData()
   if (modelFile) fd.append('model_file', modelFile)
-  fd.append('dataset_file', datasetFile)
+  if (datasetFile) fd.append('dataset_file', datasetFile)
   fd.append('protected_cols', protectedCols.join(','))
   fd.append('target_col', targetCol)
+  if (extra) Object.entries(extra).forEach(([k, v]) => v && fd.append(k, v))
   const res = await fetch(`${BASE}/api/v1/cartography/analyze`, { method: 'POST', body: fd })
   if (!res.ok) throw new Error(await res.text())
   return res.json()
@@ -19,14 +21,14 @@ export async function runCartography(
 
 export async function runConstitution(
   modelFile: File | null,
-  datasetFile: File,
+  datasetFile: File | null,
   protectedCols: string[],
   targetCol: string,
   cartographyResults: any,
 ): Promise<any> {
   const fd = new FormData()
   if (modelFile) fd.append('model_file', modelFile)
-  fd.append('dataset_file', datasetFile)
+  if (datasetFile) fd.append('dataset_file', datasetFile)
   fd.append('protected_cols', protectedCols.join(','))
   fd.append('target_col', targetCol)
   fd.append('cartography_results', JSON.stringify(cartographyResults))
@@ -36,12 +38,12 @@ export async function runConstitution(
 }
 
 export async function runProxyHunter(
-  datasetFile: File,
+  datasetFile: File | null,
   protectedCols: string[],
   targetCol: string,
 ): Promise<any> {
   const fd = new FormData()
-  fd.append('dataset_file', datasetFile)
+  if (datasetFile) fd.append('dataset_file', datasetFile)
   fd.append('protected_cols', protectedCols.join(','))
   fd.append('target_col', targetCol)
   const res = await fetch(`${BASE}/api/v1/proxy/hunt`, { method: 'POST', body: fd })
@@ -51,7 +53,7 @@ export async function runProxyHunter(
 
 export function streamRedTeam(
   modelFile: File | null,
-  datasetFile: File,
+  datasetFile: File | null,
   protectedCols: string[],
   targetCol: string,
   confirmedBiases: any[],
@@ -60,7 +62,7 @@ export function streamRedTeam(
 ): () => void {
   const fd = new FormData()
   if (modelFile) fd.append('model_file', modelFile)
-  fd.append('dataset_file', datasetFile)
+  if (datasetFile) fd.append('dataset_file', datasetFile)
   fd.append('protected_cols', protectedCols.join(','))
   fd.append('target_col', targetCol)
   fd.append('confirmed_biases', JSON.stringify(confirmedBiases))
