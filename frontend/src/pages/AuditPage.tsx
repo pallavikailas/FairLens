@@ -316,7 +316,7 @@ export default function AuditPage() {
             className="glass rounded-2xl p-5 border border-lens/20 mb-6">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-2 h-2 rounded-full bg-lens animate-pulse" />
-              <span className="text-lens-light font-mono text-sm">Running {runningStage} via Gemini 1.5 Pro...</span>
+              <span className="text-lens-light font-mono text-sm">Running {runningStage} via Gemini 2.5 Flash...</span>
             </div>
             <div className="w-full bg-white/5 rounded-full h-1.5">
               <motion.div className="h-1.5 rounded-full bg-gradient-to-r from-lens to-lens-light"
@@ -340,7 +340,7 @@ export default function AuditPage() {
       </motion.button>
 
       <p className="text-center text-white/20 text-xs mt-3 font-mono">
-        Powered by Gemini 1.5 Pro · Google Cloud · Auto-detects protected attributes
+        Powered by Gemini 2.5 Flash · Google Cloud · Auto-detects protected attributes
       </p>
     </div>
   )

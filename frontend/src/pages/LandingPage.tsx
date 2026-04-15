@@ -45,7 +45,7 @@ export default function LandingPage() {
           className="text-center mb-20">
           <div className="inline-flex items-center gap-2 bg-lens/10 border border-lens/20 text-lens-light text-xs font-mono px-4 py-2 rounded-full mb-8">
             <span className="w-1.5 h-1.5 rounded-full bg-lens-light animate-pulse" />
-            Powered by Gemini 1.5 Pro · Vertex AI · Google Cloud Run
+            Powered by Gemini 2.5 Flash · Vertex AI · Google Cloud Run
           </div>
 
           <h1 className="font-display font-bold text-white mb-6" style={{ fontSize: 'clamp(2.5rem, 6vw, 5rem)', lineHeight: 1.1 }}>

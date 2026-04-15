@@ -20,9 +20,6 @@ from sklearn.preprocessing import LabelEncoder
 from typing import Dict, List, Any, Tuple
 import logging
 
-from google.cloud import aiplatform
-from vertexai.language_models import TextEmbeddingModel
-
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -41,11 +38,7 @@ class ProxyVariableHunter:
 
     def __init__(self):
         self.graph = nx.DiGraph()
-        try:
-            self.embedding_model = TextEmbeddingModel.from_pretrained(settings.VERTEX_EMBEDDING_MODEL)
-        except Exception:
-            self.embedding_model = None
-            logger.warning("Vertex AI embedding model not available — semantic similarity disabled")
+        self.embedding_model = None  # semantic enrichment via Vertex AI disabled; correlation graph is sufficient
 
     async def hunt_proxies(
         self,
