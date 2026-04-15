@@ -5,12 +5,15 @@ calls Gemini-powered BiasCartographyService (no SHAP/UMAP).
 """
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
-from typing import Optional
-import uuid, io, httpx
+from typing import Optional, List
+import uuid, io, httpx, pickle, logging
 import pandas as pd
+from sklearn.preprocessing import LabelEncoder
 
 from app.services.cartography import cartography_service
 from app.services.auto_detect import auto_detect_columns
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -123,11 +126,39 @@ async def analyze_bias_cartography(
                 else:
                     target = df_check.columns[-1]
 
-        # 3. Call cloud-native cartography service (Gemini-powered, no SHAP/UMAP)
+        # 3. Load model and generate predictions if provided
+        model_predictions = None
+        if model_file is not None:
+            model_bytes = await model_file.read()
+            if model_bytes:
+                try:
+                    clf = pickle.loads(model_bytes)
+                    df_pred = pd.read_csv(io.StringIO(dataset_csv))
+                    feature_cols = [c for c in df_pred.columns if c != target]
+                    X = df_pred[feature_cols]
+                    # Try raw prediction first; fall back to label-encoded if model needs numerics
+                    try:
+                        preds = clf.predict(X)
+                    except Exception:
+                        X_enc = X.copy()
+                        le = LabelEncoder()
+                        for col in X_enc.select_dtypes(include=["object", "category"]).columns:
+                            try:
+                                X_enc[col] = le.fit_transform(X_enc[col].astype(str))
+                            except Exception:
+                                X_enc[col] = 0
+                        preds = clf.predict(X_enc.fillna(0))
+                    model_predictions = [int(p) for p in preds]
+                    logger.info(f"[{audit_id}] Generated {len(model_predictions)} model predictions for bias analysis")
+                except Exception as e:
+                    logger.warning(f"[{audit_id}] Could not generate model predictions: {e} — falling back to dataset labels")
+
+        # 4. Call cartography service with model predictions when available
         result = await cartography_service.run_cartography(
             dataset_csv=dataset_csv,
             protected_cols=protected,
             target_col=target,
+            model_predictions=model_predictions,
             audit_id=audit_id,
         )
 
@@ -135,6 +166,7 @@ async def analyze_bias_cartography(
         result["detected_target_col"] = target
         result["model_type"] = model_type
         result["dataset_source"] = dataset_source
+        result["analysis_source"] = "model_predictions" if model_predictions else "dataset_labels"
 
         return JSONResponse(content=result)
 

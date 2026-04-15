@@ -39,9 +39,9 @@ class BiasCartographyService:
         df = pd.read_csv(io.StringIO(dataset_csv))
         sample_df = df.sample(min(300, len(df)), random_state=42)
 
-        slice_metrics = self._compute_slice_metrics(df, protected_cols, target_col)
-        gemini_analysis = await self._gemini_analyse(sample_df, protected_cols, target_col, slice_metrics, audit_id)
-        map_points = self._generate_map_points(df, protected_cols, target_col, slice_metrics)
+        slice_metrics = self._compute_slice_metrics(df, protected_cols, target_col, model_predictions)
+        gemini_analysis = await self._gemini_analyse(sample_df, protected_cols, target_col, slice_metrics, audit_id, model_predictions is not None)
+        map_points = self._generate_map_points(df, protected_cols, target_col, slice_metrics, model_predictions)
         hotspots = self._identify_hotspots(slice_metrics)
 
         return {
@@ -61,11 +61,14 @@ class BiasCartographyService:
             }
         }
 
-    def _compute_slice_metrics(self, df, protected_cols, target_col):
+    def _compute_slice_metrics(self, df, protected_cols, target_col, model_predictions=None):
         present = [c for c in protected_cols if c in df.columns]
         if not present or target_col not in df.columns:
             return []
-        target = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
+        if model_predictions is not None and len(model_predictions) == len(df):
+            target = pd.Series(model_predictions, index=df.index, dtype=float)
+        else:
+            target = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
         overall_rate = float(target.mean())
         if overall_rate == 0:
             return []
@@ -107,10 +110,12 @@ class BiasCartographyService:
                             })
         return sorted(metrics, key=lambda m: m["bias_magnitude"], reverse=True)
 
-    async def _gemini_analyse(self, df, protected_cols, target_col, slice_metrics, audit_id):
+    async def _gemini_analyse(self, df, protected_cols, target_col, slice_metrics, audit_id, using_model_predictions=False):
         top_slices = json.dumps(slice_metrics[:10], indent=2)
         col_summary = {col: df[col].value_counts().head(8).to_dict() for col in protected_cols if col in df.columns}
-        prompt = f"""You are an AI fairness auditor analysing a dataset for bias.
+        analysis_source = "model prediction outputs (what the uploaded model actually decides)" if using_model_predictions else "dataset ground-truth labels"
+        prompt = f"""You are an AI fairness auditor analysing a model for bias.
+ANALYSIS SOURCE: {analysis_source}
 DATASET: {len(df)} rows, target='{target_col}', protected={protected_cols}
 DISTRIBUTIONS: {json.dumps(col_summary)}
 TOP BIAS FINDINGS: {top_slices}
@@ -122,20 +127,26 @@ Return ONLY this JSON:
             logger.warning(f"Gemini analysis failed: {e}")
             return {"severity": "unknown", "headline": "Analysis unavailable", "key_findings": []}
 
-    def _generate_map_points(self, df, protected_cols, target_col, slice_metrics):
+    def _generate_map_points(self, df, protected_cols, target_col, slice_metrics, model_predictions=None):
         present = [c for c in protected_cols if c in df.columns]
-        target = pd.to_numeric(df[target_col], errors="coerce").fillna(0) if target_col in df.columns else pd.Series([0]*len(df))
+        if model_predictions is not None and len(model_predictions) == len(df):
+            target = pd.Series(model_predictions, index=df.index, dtype=float)
+        elif target_col in df.columns:
+            target = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
+        else:
+            target = pd.Series([0] * len(df))
         bias_lookup = {m["label"]: m["bias_magnitude"] for m in slice_metrics}
         points = []
         sample = df.sample(min(500, len(df)), random_state=42)
-        for i, (_, row) in enumerate(sample.iterrows()):
+        for idx, row in sample.iterrows():
             bias_score = max((bias_lookup.get(f"{col}={row[col]}", 0.0) for col in present if col in row), default=0.0)
+            pred_val = float(target.loc[idx]) if idx in target.index else 0.0
             points.append({
                 "x": round(float(bias_score) + np.random.normal(0, 0.02), 4),
-                "y": round(float(target.iloc[i % len(target)]) + np.random.normal(0, 0.05), 4),
+                "y": round(pred_val + np.random.normal(0, 0.05), 4),
                 "bias_score": round(bias_score, 4),
                 "slice_label": " | ".join(f"{col}={row[col]}" for col in present if col in row) or "unknown",
-                "prediction": int(target.iloc[i % len(target)]),
+                "prediction": int(pred_val),
             })
         return points
 
