@@ -1,10 +1,29 @@
 """API routes for Fairness Red-Team Agent — streams progress via SSE."""
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
-from typing import Optional
+from typing import Optional, List
 import pandas as pd, numpy as np, pickle, io, uuid, json, asyncio, httpx
 
 router = APIRouter()
+
+
+def _resolve_feature_cols(model, df: pd.DataFrame, fallback_target: str) -> List[str]:
+    if hasattr(model, "feature_names_in_"):
+        names = list(model.feature_names_in_)
+        if names and all(n in df.columns for n in names):
+            return names
+    if hasattr(model, "feature_names") and model.feature_names:
+        names = model.feature_names
+        if all(n in df.columns for n in names):
+            return list(names)
+    if hasattr(model, "feature_name_"):
+        try:
+            names = model.feature_name_()
+            if names and all(n in df.columns for n in names):
+                return list(names)
+        except Exception:
+            pass
+    return [c for c in df.columns if c != fallback_target]
 
 
 async def _load_dataset(
@@ -85,7 +104,7 @@ async def run_redteam(
         else:
             tgt = df.columns[-1]
 
-    X = df[[c for c in df.columns if c != tgt]]
+    X = df[_resolve_feature_cols(model, df, tgt)]
     y = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
     biases = json.loads(confirmed_biases)
     audit = json.loads(audit_results)

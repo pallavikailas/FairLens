@@ -18,6 +18,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _resolve_feature_cols(model, df: pd.DataFrame, fallback_target: str) -> List[str]:
+    """
+    Return the feature columns the model actually expects.
+    Prefers the model's own stored feature names (set during fit) over guessing
+    from target_col, which avoids mismatch errors when auto-detection picks
+    the wrong target.
+    """
+    # sklearn >= 1.0 and XGBoost sklearn API store feature_names_in_
+    if hasattr(model, "feature_names_in_"):
+        names = list(model.feature_names_in_)
+        if names and all(n in df.columns for n in names):
+            return names
+    # XGBoost native booster stores feature_names
+    if hasattr(model, "feature_names") and model.feature_names:
+        names = model.feature_names
+        if all(n in df.columns for n in names):
+            return list(names)
+    # LightGBM exposes feature_name() method
+    if hasattr(model, "feature_name_"):
+        try:
+            names = model.feature_name_()
+            if names and all(n in df.columns for n in names):
+                return list(names)
+        except Exception:
+            pass
+    # Fall back to excluding the detected target column
+    return [c for c in df.columns if c != fallback_target]
+
+
 async def _load_csv_string(
     dataset_file: Optional[UploadFile],
     dataset_source: str,
@@ -138,7 +167,12 @@ async def analyze_bias_cartography(
                         import joblib
                         clf = joblib.load(io.BytesIO(model_bytes))
                     df_pred = pd.read_csv(io.StringIO(dataset_csv))
-                    feature_cols = [c for c in df_pred.columns if c != target]
+                    feature_cols = _resolve_feature_cols(clf, df_pred, target)
+                    # If model knows its own features, infer the true target as whatever column is left out
+                    non_feature_cols = [c for c in df_pred.columns if c not in feature_cols]
+                    if non_feature_cols and non_feature_cols[0] != target:
+                        logger.info(f"[{audit_id}] Overriding auto-detected target '{target}' → '{non_feature_cols[0]}' (from model feature names)")
+                        target = non_feature_cols[0]
                     X = df_pred[feature_cols]
                     # Try raw prediction first; fall back to label-encoded if model needs numerics
                     try:

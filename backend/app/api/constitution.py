@@ -1,7 +1,7 @@
 """API routes for Counterfactual Constitution."""
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
-from typing import Optional
+from typing import Optional, List
 import pandas as pd
 import numpy as np
 import pickle, io, uuid, json, httpx
@@ -11,6 +11,25 @@ from app.services.constitution import constitution_service
 from app.services.auto_detect import auto_detect_columns
 
 router = APIRouter()
+
+
+def _resolve_feature_cols(model, df: pd.DataFrame, fallback_target: str) -> List[str]:
+    if hasattr(model, "feature_names_in_"):
+        names = list(model.feature_names_in_)
+        if names and all(n in df.columns for n in names):
+            return names
+    if hasattr(model, "feature_names") and model.feature_names:
+        names = model.feature_names
+        if all(n in df.columns for n in names):
+            return list(names)
+    if hasattr(model, "feature_name_"):
+        try:
+            names = model.feature_name_()
+            if names and all(n in df.columns for n in names):
+                return list(names)
+        except Exception:
+            pass
+    return [c for c in df.columns if c != fallback_target]
 
 
 async def _load_dataset(
@@ -83,7 +102,7 @@ async def generate_constitution(
                     except Exception as e:
                         raise HTTPException(400, f"Failed to load model file: {e}")
 
-        feature_cols = [c for c in df.columns if c != tgt]
+        feature_cols = _resolve_feature_cols(model, df, tgt) if model is not None else [c for c in df.columns if c != tgt]
         X = df[feature_cols]
 
         # Generate predictions only when model is available
