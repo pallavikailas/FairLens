@@ -105,11 +105,9 @@ jobs:
 
       - name: Install and build frontend
         working-directory: frontend
-        env:
-          VITE_API_BASE_URL: ${{ needs.deploy-backend.outputs.url }}
         run: |
           npm install
-          npm run build
+          VITE_API_BASE_URL="https://fairlens-api-nrk2z2yadq-uc.a.run.app" npm run build
 
       - name: Docker login to Artifact Registry
         run: |
