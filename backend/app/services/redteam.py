@@ -25,9 +25,7 @@ import json
 from datetime import datetime
 
 from langgraph.graph import StateGraph, END
-from langchain_google_vertexai import ChatVertexAI
-from langchain_core.messages import HumanMessage, SystemMessage
-
+from app.services.gemini_client import ask_gemini
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -61,13 +59,6 @@ class FairnessRedTeamAgent:
     """
 
     def __init__(self):
-        self.llm = ChatVertexAI(
-            model_name=settings.GEMINI_MODEL,
-            project=settings.GOOGLE_CLOUD_PROJECT,
-            location=settings.VERTEX_AI_LOCATION,
-            temperature=0.3,
-            max_output_tokens=2048,
-        )
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:

@@ -18,14 +18,10 @@ import logging
 import json
 from datetime import datetime
 
-import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig
-
+from app.services.gemini_client import ask_gemini
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-
-vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.VERTEX_AI_LOCATION)
 
 
 class CounterfactualConstitutionService:
@@ -33,15 +29,8 @@ class CounterfactualConstitutionService:
     Generates the Counterfactual Constitution via Gemini 1.5 Pro.
     The constitution answers: "What implicit rules is this model following,
     and how do those rules change when demographics change?"
+    Uses the central gemini_client (API-key based) — no Vertex AI IAM required.
     """
-
-    def __init__(self):
-        self.model = GenerativeModel(settings.GEMINI_MODEL)
-        self.generation_config = GenerationConfig(
-            temperature=0.2,
-            max_output_tokens=4096,
-            top_p=0.8,
-        )
 
     async def generate_constitution(
         self,
@@ -248,12 +237,7 @@ Write in clear, accessible language. Use specific numbers from the data.
 Make it readable for both a non-technical HR manager and a data scientist.
 Use markdown formatting."""
 
-        response = self.model.generate_content(
-            prompt,
-            generation_config=self.generation_config
-        )
-
-        return response.text
+        return await ask_gemini(prompt, model="pro")
 
     def _parse_constitution(self, markdown_text: str) -> List[Dict]:
         """Parse markdown sections into structured JSON."""
