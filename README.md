@@ -14,14 +14,16 @@
 
 FairLens is a **model-agnostic** AI bias detection and remediation platform. It works as a **plugin for any model** — scikit-learn, PyTorch, TensorFlow, HuggingFace, a REST API, or a Vertex AI endpoint — and runs it through a four-stage pipeline that identifies, maps, explains, and fixes hidden bias.
 
+**A model file is optional for stages 1–3.** Upload only a CSV dataset and FairLens will auto-detect protected attributes, run Bias Cartography, generate a dataset-level Constitution, and trace proxy chains without any model. A model is required only for Stage 4 (Red-Team adversarial probing).
+
 ### The Four Stages
 
 | # | Stage | What it does |
 |---|-------|-------------|
-| ⬡ | **Bias Cartography** | Maps bias as a 2D topology using SHAP + UMAP across intersectional identity slices — not just a single number |
-| ◍ | **Counterfactual Constitution** | Uses Gemini 1.5 Pro to generate a structured document showing what the model would have decided if only demographics changed |
-| ◈ | **Proxy Variable Hunter** | Traces indirect proxy chains (zip code → race, job title → gender) using NetworkX knowledge graphs + Vertex AI embeddings |
-| ⊘ | **Red-Team Agent** | A LangGraph adversarial agent that attacks confirmed biases and applies mitigation patches — activated only after user confirmation |
+| ⬡ | **Bias Cartography** | Maps bias as a 2D topology across intersectional identity slices. Works with dataset only — no model required. Protected attributes and target column are **auto-detected by Gemini**. |
+| ◍ | **Counterfactual Constitution** | Uses Gemini 1.5 Pro to generate a structured document showing what the model would have decided if only demographics changed. When no model is provided, generates a dataset-only statistical analysis. |
+| ◈ | **Proxy Variable Hunter** | Traces indirect proxy chains (zip code → race, job title → gender) using NetworkX knowledge graphs + Vertex AI embeddings. Requires only a dataset. |
+| ⊘ | **Red-Team Agent** | A LangGraph adversarial agent that attacks confirmed biases and applies mitigation patches — activated only after user confirmation. **Requires a model file.** |
 
 ---
 
@@ -67,7 +69,7 @@ All adapters expose the same interface: `predict(X)`, `predict_proba(X)`, `get_s
 flowchart TD
     U([👤 User]) --> FE[React Frontend\nVite · Tailwind · D3 · Framer Motion]
 
-    FE -->|Upload model + dataset| API[FastAPI Backend\nCloud Run · Python 3.11]
+    FE -->|Upload dataset · model optional| API[FastAPI Backend\nCloud Run · Python 3.11]
 
     subgraph PLUGIN ["🔌 FairLens Plugin System — Universal Model Adapter"]
         API --> AD{Model Type?}

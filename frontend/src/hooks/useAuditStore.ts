@@ -4,6 +4,8 @@ export interface AuditSession {
   auditId: string | null
   modelFile: File | null
   datasetFile: File | null
+  datasetSource: string
+  datasetUrl: string
   protectedCols: string[]
   targetCol: string
   cartographyResults: any | null
@@ -19,6 +21,8 @@ export interface AuditSession {
 interface AuditStore extends AuditSession {
   setModelFile: (f: File | null) => void
   setDatasetFile: (f: File | null) => void
+  setDatasetSource: (s: string) => void
+  setDatasetUrl: (u: string) => void
   setProtectedCols: (cols: string[]) => void
   setTargetCol: (col: string) => void
   setCartographyResults: (r: any) => void
@@ -36,6 +40,8 @@ const initial: AuditSession = {
   auditId: null,
   modelFile: null,
   datasetFile: null,
+  datasetSource: 'upload',
+  datasetUrl: '',
   protectedCols: [],
   targetCol: '',
   cartographyResults: null,
@@ -52,6 +58,8 @@ export const useAuditStore = create<AuditStore>((set) => ({
   ...initial,
   setModelFile: (modelFile) => set({ modelFile }),
   setDatasetFile: (datasetFile) => set({ datasetFile }),
+  setDatasetSource: (datasetSource) => set({ datasetSource }),
+  setDatasetUrl: (datasetUrl) => set({ datasetUrl }),
   setProtectedCols: (protectedCols) => set({ protectedCols }),
   setTargetCol: (targetCol) => set({ targetCol }),
   setCartographyResults: (cartographyResults) => set({ cartographyResults }),

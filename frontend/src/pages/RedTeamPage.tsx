@@ -93,7 +93,10 @@ export default function RedTeamPage() {
   }, [allLogs])
 
   const startRedTeam = () => {
-    if (!store.datasetFile || store.confirmedBiases.length === 0) return
+    // Red-team requires a model to generate adversarial probes
+    if (!store.modelFile) return
+    if (!store.datasetFile && store.datasetSource === 'upload') return
+    if (store.confirmedBiases.length === 0) return
     setRunning(true); setStarted(true)
     setAllLogs([]); setDoneNodes(new Set()); setFinalResults(null)
 
@@ -112,7 +115,11 @@ export default function RedTeamPage() {
       auditResults,
       (event: AgentEvent) => {
         if (event.log?.length) setAllLogs(prev => [...prev, ...event.log!])
-        if (event.node && event.node !== 'complete') setActiveNode(event.node)
+        if (event.node && event.node !== 'complete' && event.node !== 'error') setActiveNode(event.node)
+        if (event.node === 'error') {
+          setActiveNode(null)
+          setRunning(false)
+        }
         if (event.status === 'done' || event.node === 'complete') {
           setActiveNode(null)
           setDoneNodes(new Set(Object.keys(NODE_META)))
@@ -121,7 +128,9 @@ export default function RedTeamPage() {
           store.setRedteamResults(event.results)
           store.setStage('done')
         }
-      }
+      },
+      store.datasetSource,
+      store.datasetUrl,
     )
     stopRef.current = stop
   }
@@ -167,7 +176,13 @@ export default function RedTeamPage() {
             ))}
           </div>
 
-          {!started && (
+          {!started && !store.modelFile && (
+            <div className="mt-6 p-3 rounded-xl bg-signal-red/10 border border-signal-red/20 text-signal-red text-xs font-mono">
+              ⚠ A model file (.pkl) is required for red-team analysis. Go back and upload your model.
+            </div>
+          )}
+
+          {!started && store.modelFile && (
             <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
               onClick={startRedTeam}
               className="w-full mt-6 py-3 rounded-xl bg-signal-red hover:bg-signal-red/90 text-white font-display font-semibold text-sm transition-all">

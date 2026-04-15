@@ -101,13 +101,17 @@ export default function AuditPage() {
     if (!canRun) return
     store.setError(null)
     store.setLoading(true)
-    // Set dummy protected cols — backend will auto-detect from dataset
-    store.setProtectedCols(['auto'])
-    store.setTargetCol('auto')
 
     try {
       setRunningStage('Bias Cartography'); setProgress(10)
       store.setStage('cartography')
+
+      // Resolve dataset URL for non-upload sources
+      const resolvedDatasetUrl = datasetUrl || hfDataset || kaggleDataset || ''
+
+      // Persist dataset source info to store so RedTeamPage can forward them
+      store.setDatasetSource(datasetSource)
+      store.setDatasetUrl(resolvedDatasetUrl)
 
       // Build extra params for model type and dataset source
       const extraParams = {
@@ -116,36 +120,53 @@ export default function AuditPage() {
         vertex_endpoint_id: vertexEndpoint,
         gcp_project: gcpProject,
         dataset_source: datasetSource,
-        dataset_url: datasetUrl || hfDataset || kaggleDataset || '',
+        dataset_url: resolvedDatasetUrl,
       }
 
       const carto = await runCartography(
         store.modelFile,
         store.datasetFile,
-        store.protectedCols,
-        store.targetCol,
+        ['auto'],
+        'auto',
         extraParams,
       )
       store.setCartographyResults(carto)
-      // Update detected protected cols from backend response
-      if (carto.detected_protected_cols?.length) {
-        store.setProtectedCols(carto.detected_protected_cols)
-      }
-      if (carto.detected_target_col) {
-        store.setTargetCol(carto.detected_target_col)
-      }
+
+      // Extract detected columns from response into LOCAL variables to avoid
+      // the Zustand stale-closure issue (store.* still holds pre-render values).
+      const detectedProtectedCols: string[] = carto.detected_protected_cols?.length
+        ? carto.detected_protected_cols
+        : ['auto']
+      const detectedTargetCol: string = carto.detected_target_col || 'auto'
+
+      // Persist to store for downstream pages
+      store.setProtectedCols(detectedProtectedCols)
+      store.setTargetCol(detectedTargetCol)
       setProgress(40)
 
       setRunningStage('Counterfactual Constitution')
       store.setStage('constitution')
+      // Pass local variables — not store.* — to avoid stale closure
       const constitution = await runConstitution(
-        store.modelFile, store.datasetFile, store.protectedCols, store.targetCol, carto
+        store.modelFile,
+        store.datasetFile,
+        detectedProtectedCols,
+        detectedTargetCol,
+        carto,
+        datasetSource,
+        resolvedDatasetUrl,
       )
       store.setConstitutionResults(constitution); setProgress(70)
 
       setRunningStage('Proxy Variable Hunter')
       store.setStage('proxy')
-      const proxy = await runProxyHunter(store.datasetFile, store.protectedCols, store.targetCol)
+      const proxy = await runProxyHunter(
+        store.datasetFile,
+        detectedProtectedCols,
+        detectedTargetCol,
+        datasetSource,
+        resolvedDatasetUrl,
+      )
       store.setProxyResults(proxy); setProgress(100)
 
       store.setStage('review')

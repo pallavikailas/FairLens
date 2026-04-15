@@ -45,7 +45,7 @@ class CounterfactualConstitutionService:
 
     async def generate_constitution(
         self,
-        model: Any,
+        model: Optional[Any],
         X: pd.DataFrame,
         y_pred: np.ndarray,
         protected_cols: List[str],
@@ -55,14 +55,14 @@ class CounterfactualConstitutionService:
     ) -> Dict[str, Any]:
         """
         Full pipeline:
-        1. Generate counterfactual pairs for each protected attribute
+        1. Generate counterfactual pairs for each protected attribute (skipped if no model)
         2. Aggregate patterns into policy statements
         3. Ask Gemini to synthesise into a structured Constitution document
         4. Return structured JSON + human-readable Markdown
         """
-        logger.info(f"[{audit_id}] Generating Counterfactual Constitution")
+        logger.info(f"[{audit_id}] Generating Counterfactual Constitution (model={'provided' if model else 'none'})")
 
-        # Step 1: Build counterfactual pairs
+        # Step 1: Build counterfactual pairs (empty when no model available)
         cf_pairs = self._generate_cf_pairs(model, X, y_pred, protected_cols, n_samples=200)
 
         # Step 2: Extract decision patterns
@@ -70,7 +70,8 @@ class CounterfactualConstitutionService:
 
         # Step 3: Gemini synthesis
         constitution_text = await self._gemini_synthesise(
-            patterns, cf_pairs, cartography_results, protected_cols, feature_names, audit_id
+            patterns, cf_pairs, cartography_results, protected_cols, feature_names, audit_id,
+            model_available=(model is not None),
         )
 
         # Step 4: Parse into structured sections
@@ -99,13 +100,17 @@ class CounterfactualConstitutionService:
         return result
 
     def _generate_cf_pairs(
-        self, model: Any, X: pd.DataFrame, y_pred: np.ndarray,
+        self, model: Optional[Any], X: pd.DataFrame, y_pred: np.ndarray,
         protected_cols: List[str], n_samples: int = 200
     ) -> List[Dict]:
         """
         For each sample, flip each protected attribute to all other observed values,
         re-predict, and record whether the decision changed.
+        Returns empty list when no model is available.
         """
+        if model is None:
+            return []
+
         pairs = []
         present_cols = [c for c in protected_cols if c in X.columns]
         indices = np.random.choice(len(X), min(n_samples, len(X)), replace=False)
@@ -181,6 +186,7 @@ class CounterfactualConstitutionService:
         protected_cols: List[str],
         feature_names: List[str],
         audit_id: str,
+        model_available: bool = True,
     ) -> str:
         """
         Use Gemini 1.5 Pro to synthesise patterns + counterfactuals
@@ -189,19 +195,21 @@ class CounterfactualConstitutionService:
         hotspots_summary = json.dumps(
             cartography_results.get("hotspots", [])[:3], indent=2
         )
-        patterns_summary = json.dumps(patterns, indent=2)
+        patterns_summary = json.dumps(patterns, indent=2) if patterns else "No counterfactual patterns available (dataset-only mode)."
         flip_examples = json.dumps(
-            [p for p in cf_pairs if p["decision_flipped"]][:10], indent=2
-        )
+            [p for p in cf_pairs if p.get("decision_flipped")][:10], indent=2
+        ) if cf_pairs else "No counterfactual pairs (no model provided)."
 
-        prompt = f"""You are an AI fairness auditor generating a "Counterfactual Constitution" — 
-a structured policy document that reveals the IMPLICIT RULES an AI model is following 
+        model_note = "" if model_available else "\nNOTE: No ML model was provided. Analysis is based on dataset statistics and the bias topology map only. Counterfactual simulation is not available.\n"
+
+        prompt = f"""You are an AI fairness auditor generating a "Counterfactual Constitution" —
+a structured policy document that reveals the IMPLICIT RULES an AI model is following
 with respect to demographic attributes.
 
 AUDIT ID: {audit_id}
 PROTECTED ATTRIBUTES ANALYZED: {', '.join(protected_cols)}
 FEATURES IN MODEL: {', '.join(feature_names[:20])}
-
+{model_note}
 COUNTERFACTUAL PATTERNS (what changes when demographics change):
 {patterns_summary}
 

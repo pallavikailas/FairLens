@@ -25,13 +25,17 @@ export async function runConstitution(
   protectedCols: string[],
   targetCol: string,
   cartographyResults: any,
+  datasetSource: string = 'upload',
+  datasetUrl: string = '',
 ): Promise<any> {
   const fd = new FormData()
   if (modelFile) fd.append('model_file', modelFile)
   if (datasetFile) fd.append('dataset_file', datasetFile)
-  fd.append('protected_cols', protectedCols.join(','))
-  fd.append('target_col', targetCol)
+  fd.append('protected_cols', protectedCols.length > 0 ? protectedCols.join(',') : 'auto')
+  fd.append('target_col', targetCol || 'auto')
   fd.append('cartography_results', JSON.stringify(cartographyResults))
+  fd.append('dataset_source', datasetSource)
+  if (datasetUrl) fd.append('dataset_url', datasetUrl)
   const res = await fetch(`${BASE}/api/v1/constitution/generate`, { method: 'POST', body: fd })
   if (!res.ok) throw new Error(await res.text())
   return res.json()
@@ -41,11 +45,15 @@ export async function runProxyHunter(
   datasetFile: File | null,
   protectedCols: string[],
   targetCol: string,
+  datasetSource: string = 'upload',
+  datasetUrl: string = '',
 ): Promise<any> {
   const fd = new FormData()
   if (datasetFile) fd.append('dataset_file', datasetFile)
-  fd.append('protected_cols', protectedCols.join(','))
-  fd.append('target_col', targetCol)
+  fd.append('protected_cols', protectedCols.length > 0 ? protectedCols.join(',') : 'auto')
+  fd.append('target_col', targetCol || 'auto')
+  fd.append('dataset_source', datasetSource)
+  if (datasetUrl) fd.append('dataset_url', datasetUrl)
   const res = await fetch(`${BASE}/api/v1/proxy/hunt`, { method: 'POST', body: fd })
   if (!res.ok) throw new Error(await res.text())
   return res.json()
@@ -59,18 +67,27 @@ export function streamRedTeam(
   confirmedBiases: any[],
   auditResults: any,
   onEvent: (e: any) => void,
+  datasetSource: string = 'upload',
+  datasetUrl: string = '',
 ): () => void {
   const fd = new FormData()
   if (modelFile) fd.append('model_file', modelFile)
   if (datasetFile) fd.append('dataset_file', datasetFile)
-  fd.append('protected_cols', protectedCols.join(','))
-  fd.append('target_col', targetCol)
+  fd.append('protected_cols', protectedCols.length > 0 ? protectedCols.join(',') : 'auto')
+  fd.append('target_col', targetCol || 'auto')
   fd.append('confirmed_biases', JSON.stringify(confirmedBiases))
   fd.append('audit_results', JSON.stringify(auditResults))
+  fd.append('dataset_source', datasetSource)
+  if (datasetUrl) fd.append('dataset_url', datasetUrl)
 
   const controller = new AbortController()
   fetch(`${BASE}/api/v1/redteam/run`, { method: 'POST', body: fd, signal: controller.signal })
     .then(async (res) => {
+      if (!res.ok) {
+        const errText = await res.text()
+        onEvent({ node: 'error', status: 'error', log: [`Error: ${errText}`] })
+        return
+      }
       const reader = res.body!.getReader()
       const dec = new TextDecoder()
       while (true) {

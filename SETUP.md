@@ -181,16 +181,14 @@ This creates `sample_model.pkl` and `sample_dataset.csv` in your backend directo
 
 1. Go to http://localhost:5173
 2. Click **Launch FairLens →**
-3. Select **scikit-learn / XGBoost / LightGBM** as model type
-4. Upload `sample_model.pkl` as the model
-5. Upload `sample_dataset.csv` as the dataset
-6. Protected columns: `gender,race,age`  (add each one)
-7. Target column: `hired`
-8. Click **Run Full Bias Audit →**
+3. **Dataset source:** select **Upload CSV** and drop in `sample_dataset.csv`
+4. **Model type (optional):** select **scikit-learn / XGBoost** and drop in `sample_model.pkl`
+   - You can skip the model — stages 1–3 work with a dataset alone
+5. Click **Detect Biases Automatically →**
 
-The three analysis stages run sequentially. Once complete, you'll land on the Results page showing the bias topology map, counterfactual constitution, and proxy graph.
+FairLens auto-detects protected attributes (`gender`, `race`, `age`) and the target column (`hired`) from the dataset — no manual column configuration needed. The three analysis stages run sequentially. Once complete, you'll land on the Results page showing the bias topology map, counterfactual constitution, and proxy graph.
 
-> **Note:** Without a real GCP project, the Counterfactual Constitution stage (which calls Gemini 1.5 Pro) will return an error. All other stages (Cartography, Proxy Hunter) run fully offline. To enable the Constitution stage, complete Part 3 below.
+> **Note:** Without a real GCP project, the Counterfactual Constitution stage (which calls Gemini 1.5 Pro) will return an error. Bias Cartography and Proxy Hunter run fully offline. If a model file is provided, the Constitution stage also skips Gemini and produces a dataset-level summary instead. To enable full Gemini-powered analysis, complete Part 3 below.
 
 ---
 
@@ -392,18 +390,18 @@ bq query --use_legacy_sql=false \
 ## PART 6 — Run a Full Audit on Cloud
 
 1. Open your Cloud Run frontend URL
-2. Select **scikit-learn** model type
-3. Upload your `sample_model.pkl` and `sample_dataset.csv`
-4. Set protected columns: `gender`, `race`, `age`
-5. Set target column: `hired`
-6. Click **Run Full Bias Audit →**
+2. **Dataset source:** select **Upload CSV** and upload `sample_dataset.csv`
+3. **Model type (optional):** select **scikit-learn / XGBoost** and upload `sample_model.pkl`
+   - Stages 1–3 run without a model; Stage 4 (Red-Team) requires one
+4. Click **Detect Biases Automatically →**
+   - Protected attributes and target column are auto-detected — no manual input needed
 
 All four stages now run on Cloud Run with:
-- Bias Cartography → SHAP + UMAP locally in the container
-- Counterfactual Constitution → calls **Gemini 1.5 Pro** via Vertex AI
+- Bias Cartography → Gemini-powered bias analysis (dataset-only, no SHAP/UMAP required)
+- Counterfactual Constitution → calls **Gemini 1.5 Pro** via Vertex AI (full counterfactuals when model provided; dataset-level analysis otherwise)
 - Proxy Variable Hunter → calls **Vertex AI Embeddings** (text-embedding-004)
 - Audit logs written to **BigQuery**
-- Red-Team Agent → LangGraph + **Gemini 1.5 Pro**, streamed live via SSE
+- Red-Team Agent → LangGraph + **Gemini 1.5 Pro**, streamed live via SSE *(model file required)*
 
 ---
 
