@@ -2,8 +2,8 @@
 
 > *"Computer programs now make life-changing decisions about who gets a job, a loan, or medical care. FairLens makes sure those decisions are fair."*
 
-[![CI](https://github.com/yourusername/fairlens/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/fairlens/actions/workflows/ci.yml)
-[![Deploy](https://github.com/yourusername/fairlens/actions/workflows/deploy.yml/badge.svg)](https://github.com/yourusername/fairlens/actions/workflows/deploy.yml)
+[![CI](https://github.com/pallavikailas/fairlens/actions/workflows/ci.yml/badge.svg)](https://github.com/pallavikailas/fairlens/actions/workflows/ci.yml)
+[![Deploy](https://github.com/pallavikailas/fairlens/actions/workflows/deploy.yml/badge.svg)](https://github.com/pallavikailas/fairlens/actions/workflows/deploy.yml)
 [![Google Solution Challenge 2026](https://img.shields.io/badge/Google%20Solution%20Challenge-2026-4285F4?logo=google)](https://developers.google.com/community/gdsc-solution-challenge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![SDG 10](https://img.shields.io/badge/UN%20SDG-10%20Reduced%20Inequalities-E5243B)](https://sdgs.un.org/goals/goal10)
