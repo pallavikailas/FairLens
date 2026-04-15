@@ -132,7 +132,11 @@ async def analyze_bias_cartography(
             model_bytes = await model_file.read()
             if model_bytes:
                 try:
-                    clf = pickle.loads(model_bytes)
+                    try:
+                        clf = pickle.loads(model_bytes)
+                    except Exception:
+                        import joblib
+                        clf = joblib.load(io.BytesIO(model_bytes))
                     df_pred = pd.read_csv(io.StringIO(dataset_csv))
                     feature_cols = [c for c in df_pred.columns if c != target]
                     X = df_pred[feature_cols]

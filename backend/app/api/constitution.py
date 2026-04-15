@@ -75,8 +75,12 @@ async def generate_constitution(
             if model_bytes:
                 try:
                     model = pickle.loads(model_bytes)
-                except Exception as e:
-                    raise HTTPException(400, f"Failed to load model file: {e}")
+                except Exception:
+                    try:
+                        import joblib
+                        model = joblib.load(io.BytesIO(model_bytes))
+                    except Exception as e:
+                        raise HTTPException(400, f"Failed to load model file: {e}")
 
         feature_cols = [c for c in df.columns if c != tgt]
         X = df[feature_cols]

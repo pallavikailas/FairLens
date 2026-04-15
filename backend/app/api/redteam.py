@@ -56,8 +56,12 @@ async def run_redteam(
 
     try:
         model = pickle.loads(model_bytes)
-    except Exception as e:
-        raise HTTPException(400, f"Failed to load model file: {e}")
+    except Exception:
+        try:
+            import joblib
+            model = joblib.load(io.BytesIO(model_bytes))
+        except Exception as e:
+            raise HTTPException(400, f"Failed to load model file: {e}")
 
     dataset_csv = await _load_dataset(dataset_file, dataset_source, dataset_url)
     df = pd.read_csv(io.StringIO(dataset_csv))
