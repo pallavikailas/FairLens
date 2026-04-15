@@ -1,252 +1,209 @@
 """
-Bias Cartography Service — Cloud-Native (Gemini-powered)
-=========================================================
-No SHAP. No UMAP. No local ML libraries.
-
-Sends the dataset to Gemini 1.5 Pro which:
-1. Computes statistical bias metrics per demographic slice
-2. Identifies intersectional bias patterns
-3. Generates 2D topology coordinates via embedding similarity
-4. Returns hotspot clusters with plain-English explanations
+Cartography API — bridges the cloud-native frontend with the original SHAP/UMAP service.
+Accepts CSV (upload or online source), auto-detects columns, runs the full pipeline.
 """
-
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi.responses import JSONResponse
+from typing import Optional
+import uuid, io, httpx
 import pandas as pd
 import numpy as np
-import json
-import uuid
-import logging
-from typing import Dict, List, Any, Optional
 
-from app.services.gemini_client import ask_gemini_json, ask_gemini
-from app.core.config import settings
+from app.services.cartography import cartography_service
+from app.services.auto_detect import auto_detect_columns
 
-logger = logging.getLogger(__name__)
+router = APIRouter()
 
 
-class BiasCartographyService:
+async def _load_csv(
+    dataset_file: Optional[UploadFile],
+    dataset_source: str,
+    dataset_url: str,
+) -> pd.DataFrame:
+    """Load dataset from any source into a DataFrame."""
 
-    async def run_cartography(
-        self,
-        dataset_csv: str,          # raw CSV text
-        protected_cols: List[str],
-        target_col: str,
-        model_predictions: Optional[List] = None,
-        audit_id: str = "",
-    ) -> Dict[str, Any]:
+    if dataset_source == 'upload' or not dataset_source or not dataset_url:
+        if not dataset_file:
+            raise HTTPException(400, "dataset_file required")
+        raw = await dataset_file.read()
+        return pd.read_csv(io.BytesIO(raw))
 
-        logger.info(f"[{audit_id}] Starting cloud Bias Cartography")
+    elif dataset_source == 'url' and dataset_url:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(dataset_url)
+            resp.raise_for_status()
+            return pd.read_csv(io.StringIO(resp.text))
 
-        # Parse CSV
-        import io
-        df = pd.read_csv(io.StringIO(dataset_csv))
+    elif dataset_source == 'huggingface' and dataset_url:
+        name = dataset_url.strip()
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
 
-        # Cap rows sent to Gemini (token limit)
-        sample_df = df.sample(min(300, len(df)), random_state=42)
+            # Try the datasets-server API with splits discovery
+            splits_resp = await client.get(
+                f"https://datasets-server.huggingface.co/splits?dataset={name}"
+            )
+            if splits_resp.status_code == 200:
+                splits_data = splits_resp.json()
+                splits = splits_data.get("splits", [])
+                if splits:
+                    first = splits[0]
+                    config = first.get("config", "default")
+                    split = first.get("split", "train")
+                    rows_resp = await client.get(
+                        f"https://datasets-server.huggingface.co/rows"
+                        f"?dataset={name}&config={config}&split={split}&offset=0&length=300"
+                    )
+                    if rows_resp.status_code == 200:
+                        data = rows_resp.json()
+                        rows = data.get("rows", [])
+                        if rows:
+                            return pd.DataFrame([r["row"] for r in rows])
 
-        # Step 1: Statistical metrics per slice
-        slice_metrics = self._compute_slice_metrics(df, protected_cols, target_col)
+            # Fallback: try to download parquet file directly from HuggingFace Hub
+            parquet_resp = await client.get(
+                f"https://huggingface.co/api/datasets/{name}/parquet"
+            )
+            if parquet_resp.status_code == 200:
+                parquet_info = parquet_resp.json()
+                # Get first available parquet URL
+                for split_name, configs in parquet_info.items():
+                    for config_name, files in configs.items() if isinstance(configs, dict) else [("default", configs)]:
+                        file_list = files if isinstance(files, list) else [files]
+                        for pf in file_list[:1]:
+                            url = pf if isinstance(pf, str) else pf.get("url", "")
+                            if url:
+                                pq_resp = await client.get(url)
+                                if pq_resp.status_code == 200:
+                                    import pyarrow.parquet as pq
+                                    import pyarrow as pa
+                                    import io as _io
+                                    buf = _io.BytesIO(pq_resp.content)
+                                    table = pq.read_table(buf)
+                                    return table.to_pandas().head(300)
 
-        # Step 2: Ask Gemini to analyse bias patterns
-        gemini_analysis = await self._gemini_analyse(
-            sample_df, protected_cols, target_col, slice_metrics, audit_id
+            raise HTTPException(400,
+                f"Could not load '{name}' from HuggingFace. "
+                f"Please download the dataset CSV from "
+                f"https://huggingface.co/datasets/{name}/tree/main "
+                f"and upload it using the 'Upload CSV' option instead."
+            )
+
+    elif dataset_source == 'kaggle':
+        raise HTTPException(400,
+            "Kaggle requires authentication. Please download the CSV from Kaggle and upload it directly.")
+
+    raise HTTPException(400, "No valid dataset provided")
+
+
+class _DatasetOnlyModel:
+    """
+    Dummy model used when no model file is uploaded.
+    Uses the target column's values as pseudo-predictions so the
+    cartography service can still compute bias metrics.
+    """
+    def __init__(self, y: np.ndarray):
+        self._y = y
+
+    def predict(self, X):
+        return self._y[:len(X)]
+
+    def predict_proba(self, X):
+        p = self._y[:len(X)].astype(float)
+        return np.column_stack([1 - p, p])
+
+
+@router.post("/analyze")
+async def analyze_bias_cartography(
+    dataset_file: Optional[UploadFile] = File(default=None),
+    model_file: Optional[UploadFile] = File(default=None),
+    protected_cols: str = Form(default="auto"),
+    target_col: str = Form(default="auto"),
+    model_type: str = Form(default="sklearn"),
+    api_endpoint: str = Form(default=""),
+    vertex_endpoint_id: str = Form(default=""),
+    gcp_project: str = Form(default=""),
+    dataset_source: str = Form(default="upload"),
+    dataset_url: str = Form(default=""),
+):
+    audit_id = str(uuid.uuid4())[:8]
+    try:
+        # 1. Load dataset
+        df = await _load_csv(dataset_file, dataset_source, dataset_url)
+
+        # 2. Auto-detect or use provided columns
+        csv_str = df.to_csv(index=False)
+        if protected_cols in ("auto", "", "['auto']", "auto,"):
+            detected = await auto_detect_columns(csv_str, audit_id)
+            protected = detected["protected_cols"]
+            target = detected["target_col"]
+        else:
+            protected = [c.strip() for c in protected_cols.split(",") if c.strip() and c.strip() != "auto"]
+            target = target_col
+
+        # Fallback if detection failed
+        if not protected:
+            protected = []
+        if not target or target not in df.columns:
+            # Pick first binary column
+            for col in df.columns:
+                if df[col].nunique() == 2:
+                    target = col
+                    break
+            else:
+                target = df.columns[-1]
+
+        # 3. Load model or use dummy
+        feature_cols = [c for c in df.columns if c != target]
+        X = df[feature_cols].copy()
+        y_true = pd.to_numeric(df[target], errors="coerce").fillna(0).values
+
+        if model_file and model_file.filename:
+            import pickle
+            model_bytes = await model_file.read()
+            model = pickle.loads(model_bytes)
+            # Encode categoricals for sklearn
+            from sklearn.preprocessing import LabelEncoder
+            X_enc = X.copy()
+            for col in X_enc.select_dtypes(include=["object", "category"]).columns:
+                try:
+                    X_enc[col] = LabelEncoder().fit_transform(X_enc[col].astype(str))
+                except Exception:
+                    X_enc[col] = 0
+            X_enc = X_enc.fillna(0)
+            y_pred = model.predict(X_enc)
+        else:
+            # No model — use target column as predictions
+            model = _DatasetOnlyModel(y_true)
+            y_pred = y_true.copy()
+
+        # Cap rows to avoid UMAP memory/reshape errors (UMAP works best under 3000 rows)
+        MAX_ROWS = 3000
+        if len(X) > MAX_ROWS:
+            idx = np.random.choice(len(X), MAX_ROWS, replace=False)
+            X = X.iloc[idx].reset_index(drop=True)
+            y_pred = y_pred[idx]
+            y_true = y_true[idx]
+            if not (model_file and model_file.filename):
+                model = _DatasetOnlyModel(y_true)
+
+        # 4. Run cartography
+        result = await cartography_service.run_cartography(
+            model=model,
+            X=X,
+            y_pred=y_pred,
+            y_true=y_true,
+            protected_cols=protected,
+            audit_id=audit_id,
         )
 
-        # Step 3: Generate synthetic 2D map from slice metrics
-        map_points = self._generate_map_points(df, protected_cols, target_col, slice_metrics)
+        result["detected_protected_cols"] = protected
+        result["detected_target_col"] = target
+        result["model_type"] = model_type
+        result["dataset_source"] = dataset_source
 
-        # Step 4: Identify hotspots from metrics
-        hotspots = self._identify_hotspots(slice_metrics)
+        return JSONResponse(content=result)
 
-        result = {
-            "audit_id": audit_id,
-            "map_points": map_points,
-            "hotspots": hotspots,
-            "slice_metrics": slice_metrics,
-            "gemini_analysis": gemini_analysis,
-            "summary": {
-                "total_samples": len(df),
-                "hotspot_count": len(hotspots),
-                "protected_cols_found": [c for c in protected_cols if c in df.columns],
-                "overall_bias_score": round(
-                    np.mean([abs(m["statistical_parity_diff"]) for m in slice_metrics]) if slice_metrics else 0, 3
-                ),
-                "most_biased_slice": slice_metrics[0]["label"] if slice_metrics else None,
-            }
-        }
-
-        logger.info(f"[{audit_id}] Cartography complete. {len(hotspots)} hotspots.")
-        return result
-
-    def _compute_slice_metrics(
-        self, df: pd.DataFrame, protected_cols: List[str], target_col: str
-    ) -> List[Dict]:
-        """Pure pandas — compute SPD and DI per demographic slice."""
-        present = [c for c in protected_cols if c in df.columns]
-        if not present or target_col not in df.columns:
-            return []
-
-        # Ensure target is numeric
-        target = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
-        overall_rate = float(target.mean())
-        if overall_rate == 0:
-            return []
-
-        metrics = []
-        for col in present:
-            for val in df[col].dropna().unique():
-                mask = df[col] == val
-                if mask.sum() < 5:
-                    continue
-                group_rate = float(target[mask].mean())
-                spd = round(group_rate - overall_rate, 4)
-                di = round(group_rate / overall_rate, 4) if overall_rate > 0 else 0
-                metrics.append({
-                    "label": f"{col}={val}",
-                    "attribute": col,
-                    "value": str(val),
-                    "size": int(mask.sum()),
-                    "positive_rate": round(group_rate, 4),
-                    "overall_rate": round(overall_rate, 4),
-                    "statistical_parity_diff": spd,
-                    "disparate_impact": di,
-                    "bias_magnitude": round(abs(spd), 4),
-                    "flagged": abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD
-                              or di < settings.DISPARATE_IMPACT_THRESHOLD,
-                })
-
-        # Intersectional pairs
-        if len(present) >= 2:
-            for i, c1 in enumerate(present):
-                for c2 in present[i+1:]:
-                    for v1 in df[c1].dropna().unique()[:4]:
-                        for v2 in df[c2].dropna().unique()[:4]:
-                            mask = (df[c1] == v1) & (df[c2] == v2)
-                            if mask.sum() < 5:
-                                continue
-                            group_rate = float(target[mask].mean())
-                            spd = round(group_rate - overall_rate, 4)
-                            di = round(group_rate / overall_rate, 4) if overall_rate > 0 else 0
-                            metrics.append({
-                                "label": f"{c1}={v1} ∩ {c2}={v2}",
-                                "attribute": f"{c1}+{c2}",
-                                "value": f"{v1}+{v2}",
-                                "size": int(mask.sum()),
-                                "positive_rate": round(group_rate, 4),
-                                "overall_rate": round(overall_rate, 4),
-                                "statistical_parity_diff": spd,
-                                "disparate_impact": di,
-                                "bias_magnitude": round(abs(spd), 4),
-                                "flagged": abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD
-                                          or di < settings.DISPARATE_IMPACT_THRESHOLD,
-                            })
-
-        return sorted(metrics, key=lambda m: m["bias_magnitude"], reverse=True)
-
-    async def _gemini_analyse(
-        self, df: pd.DataFrame, protected_cols: List[str],
-        target_col: str, slice_metrics: List[Dict], audit_id: str
-    ) -> Dict:
-        """Send data summary to Gemini for deep bias analysis."""
-
-        top_slices = json.dumps(slice_metrics[:10], indent=2)
-        col_summary = {}
-        for col in protected_cols:
-            if col in df.columns:
-                col_summary[col] = df[col].value_counts().head(8).to_dict()
-
-        prompt = f"""You are an AI fairness auditor analysing a dataset for bias.
-
-DATASET OVERVIEW:
-- Total rows: {len(df)}
-- Target column: '{target_col}' (what we're predicting — e.g. hired, approved, denied)
-- Protected attributes being audited: {protected_cols}
-- Value distributions: {json.dumps(col_summary, indent=2)}
-
-TOP BIAS FINDINGS (statistical parity difference per demographic slice):
-{top_slices}
-
-Analyse this data and return a JSON object with exactly these keys:
-{{
-  "severity": "critical" | "high" | "medium" | "low",
-  "headline": "one sentence summary of the worst bias found",
-  "key_findings": ["finding 1", "finding 2", "finding 3"],
-  "most_affected_group": "which demographic group is most disadvantaged",
-  "bias_type": "direct | proxy | intersectional | systemic",
-  "real_world_impact": "concrete description of what this means for real people",
-  "legal_risk": "EU AI Act / EEOC / 4-fifths rule assessment",
-  "recommended_action": "most urgent remediation step"
-}}
-
-Return ONLY the JSON object, no markdown, no explanation."""
-
-        try:
-            return await ask_gemini_json(prompt, model="flash")
-        except Exception as e:
-            logger.warning(f"Gemini analysis failed: {e}")
-            return {"severity": "unknown", "headline": "Gemini analysis unavailable — check API key", "key_findings": []}
-
-    def _generate_map_points(
-        self, df: pd.DataFrame, protected_cols: List[str],
-        target_col: str, slice_metrics: List[Dict]
-    ) -> List[Dict]:
-        """
-        Generate 2D map coordinates from bias metrics.
-        Uses SPD and DI as the two axes — no UMAP needed.
-        Each point = one row in the dataset, coloured by its slice's bias magnitude.
-        """
-        present = [c for c in protected_cols if c in df.columns]
-        target = pd.to_numeric(df[target_col], errors="coerce").fillna(0) if target_col in df.columns else pd.Series([0]*len(df))
-
-        # Build bias lookup by slice label
-        bias_lookup = {m["label"]: m["bias_magnitude"] for m in slice_metrics}
-
-        points = []
-        sample = df.sample(min(500, len(df)), random_state=42)
-
-        for i, (_, row) in enumerate(sample.iterrows()):
-            # Find bias score for this row's slice
-            bias_score = 0.0
-            for col in present:
-                if col in row:
-                    label = f"{col}={row[col]}"
-                    bias_score = max(bias_score, bias_lookup.get(label, 0.0))
-
-            # 2D coords: x = bias score (jittered), y = target value (jittered)
-            x = float(bias_score) + np.random.normal(0, 0.02)
-            y = float(target.iloc[i % len(target)]) + np.random.normal(0, 0.05)
-
-            slice_label = " | ".join(
-                f"{col}={row[col]}" for col in present if col in row
-            ) or "unknown"
-
-            points.append({
-                "x": round(x, 4),
-                "y": round(y, 4),
-                "bias_score": round(bias_score, 4),
-                "slice_label": slice_label,
-                "prediction": int(target.iloc[i % len(target)]),
-            })
-
-        return points
-
-    def _identify_hotspots(self, slice_metrics: List[Dict]) -> List[Dict]:
-        """Top flagged slices become hotspots."""
-        flagged = [m for m in slice_metrics if m.get("flagged")]
-        hotspots = []
-        for i, m in enumerate(flagged[:8]):
-            hotspots.append({
-                "cluster_id": i,
-                "centroid_x": m["bias_magnitude"],
-                "centroid_y": m["positive_rate"],
-                "size": m["size"],
-                "mean_bias_magnitude": m["bias_magnitude"],
-                "dominant_slice": m["label"],
-                "severity": "critical" if m["bias_magnitude"] > 0.3 else
-                            "high" if m["bias_magnitude"] > 0.15 else "medium",
-                "statistical_parity_diff": m["statistical_parity_diff"],
-                "disparate_impact": m["disparate_impact"],
-            })
-        return hotspots
-
-
-cartography_service = BiasCartographyService()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cartography failed: {str(e)}")
