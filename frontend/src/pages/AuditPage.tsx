@@ -5,16 +5,51 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useAuditStore } from '../hooks/useAuditStore'
 import { runCartography, runConstitution, runProxyHunter } from '../utils/api'
 
-function DropZone({ label, accept, file, onDrop, icon }: any) {
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept, maxFiles: 1 })
+// ── Model type config ──────────────────────────────────────────────────────
+const MODEL_TYPES = [
+  { id: 'sklearn',    icon: '🧠', label: 'scikit-learn / XGBoost',     desc: 'Upload a .pkl model file' },
+  { id: 'api',        icon: '🌐', label: 'REST API Endpoint',           desc: 'Any model behind an HTTP URL' },
+  { id: 'huggingface',icon: '🤗', label: 'HuggingFace',                desc: 'Model name from HuggingFace Hub' },
+  { id: 'vertex_ai',  icon: '☁',  label: 'Vertex AI Endpoint',          desc: 'Google Cloud deployed model' },
+] as const
+
+type ModelType = typeof MODEL_TYPES[number]['id']
+
+// ── Dataset source config ──────────────────────────────────────────────────
+const DATASET_SOURCES = [
+  { id: 'upload',     icon: '📂', label: 'Upload CSV',         desc: 'Upload from your device' },
+  { id: 'url',        icon: '🔗', label: 'URL',                desc: 'Direct link to a CSV file' },
+  { id: 'huggingface',icon: '🤗', label: 'HuggingFace Dataset',desc: 'Dataset name from HuggingFace Hub' },
+  { id: 'kaggle',     icon: '📊', label: 'Kaggle Dataset',     desc: 'Kaggle dataset path (owner/dataset)' },
+] as const
+
+type DatasetSource = typeof DATASET_SOURCES[number]['id']
+
+function DropZone({ file, onDrop }: { file: File | null; onDrop: (f: File[]) => void }) {
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop, accept: { 'application/octet-stream': ['.pkl'] }, maxFiles: 1
+  })
   return (
-    <div {...getRootProps()} className={`
-      border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all
-      ${isDragActive ? 'border-lens bg-lens/5' : file
-        ? 'border-signal-green/40 bg-signal-green/5'
-        : 'border-white/10 hover:border-white/20'}`}>
+    <div {...getRootProps()} className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all
+      ${isDragActive ? 'border-lens bg-lens/5' : file ? 'border-signal-green/40 bg-signal-green/5' : 'border-white/10 hover:border-white/20'}`}>
       <input {...getInputProps()} />
-      <div className="text-3xl mb-3">{file ? '✓' : icon}</div>
+      <div className="text-2xl mb-1">{file ? '✓' : '📎'}</div>
+      {file
+        ? <div className="text-signal-green font-mono text-xs">{file.name}</div>
+        : <div className="text-white/40 text-xs">{isDragActive ? 'Drop here' : 'Drag .pkl or click'}</div>}
+    </div>
+  )
+}
+
+function DatasetDropZone({ file, onDrop }: { file: File | null; onDrop: (f: File[]) => void }) {
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop, accept: { 'text/csv': ['.csv'] }, maxFiles: 1
+  })
+  return (
+    <div {...getRootProps()} className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all
+      ${isDragActive ? 'border-lens bg-lens/5' : file ? 'border-signal-green/40 bg-signal-green/5' : 'border-white/10 hover:border-white/20'}`}>
+      <input {...getInputProps()} />
+      <div className="text-3xl mb-2">{file ? '✓' : '📊'}</div>
       {file ? (
         <div>
           <div className="text-signal-green font-mono text-sm">{file.name}</div>
@@ -22,64 +57,95 @@ function DropZone({ label, accept, file, onDrop, icon }: any) {
         </div>
       ) : (
         <div>
-          <div className="text-white/70 text-sm font-medium mb-1">{label}</div>
-          <div className="text-white/30 text-xs">{isDragActive ? 'Drop here' : 'Drag & drop or click to browse'}</div>
+          <div className="text-white/60 text-sm font-medium mb-1">Drop your CSV here</div>
+          <div className="text-white/30 text-xs">{isDragActive ? 'Drop it!' : 'or click to browse'}</div>
         </div>
       )}
     </div>
   )
 }
 
-function ColTag({ col, onRemove }: { col: string; onRemove?: () => void }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-lens/10 border border-lens/30 text-lens-light text-xs font-mono">
-      {col}
-      {onRemove && <button onClick={onRemove} className="hover:opacity-70 ml-1">×</button>}
-    </span>
-  )
-}
-
 export default function AuditPage() {
   const nav = useNavigate()
   const store = useAuditStore()
-  const [newCol, setNewCol] = useState('')
+  const [modelType, setModelType] = useState<ModelType>('sklearn')
+  const [datasetSource, setDatasetSource] = useState<DatasetSource>('upload')
+  const [apiEndpoint, setApiEndpoint] = useState('')
+  const [hfModel, setHfModel] = useState('')
+  const [vertexEndpoint, setVertexEndpoint] = useState('')
+  const [gcpProject, setGcpProject] = useState('')
+  const [datasetUrl, setDatasetUrl] = useState('')
+  const [hfDataset, setHfDataset] = useState('')
+  const [kaggleDataset, setKaggleDataset] = useState('')
   const [runningStage, setRunningStage] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
 
-  const onDropModel = useCallback((files: File[]) => {
-    if (files[0]) store.setModelFile(files[0])
-  }, [])
+  const onDropModel = useCallback((files: File[]) => { if (files[0]) store.setModelFile(files[0]) }, [])
+  const onDropDataset = useCallback((files: File[]) => { if (files[0]) store.setDatasetFile(files[0]) }, [])
 
-  const onDropDataset = useCallback((files: File[]) => {
-    if (files[0]) store.setDatasetFile(files[0])
-  }, [])
+  const datasetReady = datasetSource === 'upload'
+    ? !!store.datasetFile
+    : datasetSource === 'url' ? !!datasetUrl
+    : datasetSource === 'huggingface' ? !!hfDataset
+    : !!kaggleDataset
 
-  const addCol = () => {
-    const c = newCol.trim()
-    if (c && !store.protectedCols.includes(c)) store.setProtectedCols([...store.protectedCols, c])
-    setNewCol('')
-  }
+  const modelReady = modelType === 'sklearn'
+    ? !!store.modelFile
+    : modelType === 'api' ? !!apiEndpoint
+    : modelType === 'huggingface' ? !!hfModel
+    : !!vertexEndpoint && !!gcpProject
 
-  const canRun = store.datasetFile && store.protectedCols.length > 0 && store.targetCol
+  const canRun = datasetReady
 
   const runAudit = async () => {
     if (!canRun) return
     store.setError(null)
     store.setLoading(true)
+    // Set dummy protected cols — backend will auto-detect from dataset
+    store.setProtectedCols(['auto'])
+    store.setTargetCol('auto')
+
     try {
       setRunningStage('Bias Cartography'); setProgress(10)
       store.setStage('cartography')
-      const carto = await runCartography(store.modelFile, store.datasetFile!, store.protectedCols, store.targetCol)
-      store.setCartographyResults(carto); setProgress(40)
+
+      // Build extra params for model type and dataset source
+      const extraParams = {
+        model_type: modelType,
+        api_endpoint: apiEndpoint || hfModel || '',
+        vertex_endpoint_id: vertexEndpoint,
+        gcp_project: gcpProject,
+        dataset_source: datasetSource,
+        dataset_url: datasetUrl || hfDataset || kaggleDataset || '',
+      }
+
+      const carto = await runCartography(
+        store.modelFile,
+        store.datasetFile,
+        store.protectedCols,
+        store.targetCol,
+        extraParams,
+      )
+      store.setCartographyResults(carto)
+      // Update detected protected cols from backend response
+      if (carto.detected_protected_cols?.length) {
+        store.setProtectedCols(carto.detected_protected_cols)
+      }
+      if (carto.detected_target_col) {
+        store.setTargetCol(carto.detected_target_col)
+      }
+      setProgress(40)
 
       setRunningStage('Counterfactual Constitution')
       store.setStage('constitution')
-      const constitution = await runConstitution(store.modelFile, store.datasetFile!, store.protectedCols, store.targetCol, carto)
+      const constitution = await runConstitution(
+        store.modelFile, store.datasetFile, store.protectedCols, store.targetCol, carto
+      )
       store.setConstitutionResults(constitution); setProgress(70)
 
       setRunningStage('Proxy Variable Hunter')
       store.setStage('proxy')
-      const proxy = await runProxyHunter(store.datasetFile!, store.protectedCols, store.targetCol)
+      const proxy = await runProxyHunter(store.datasetFile, store.protectedCols, store.targetCol)
       store.setProxyResults(proxy); setProgress(100)
 
       store.setStage('review')
@@ -98,71 +164,121 @@ export default function AuditPage() {
         <div className="text-xs font-mono text-lens-light mb-2">Step 1 of 6</div>
         <h1 className="font-display font-bold text-white text-3xl mb-2">Configure Audit</h1>
         <p className="text-white/40 text-sm">
-          Upload your model and dataset. FairLens analyses bias using Gemini 1.5 Pro on Google Cloud.
+          Upload or connect your data. FairLens automatically detects protected attributes and
+          tells you exactly what biases exist — no manual configuration needed.
         </p>
       </motion.div>
 
-      {/* File uploads */}
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-        className="grid md:grid-cols-2 gap-4 mb-6">
-        <DropZone
-          label="Trained Model (.pkl) — optional"
-          accept={{ 'application/octet-stream': ['.pkl'] }}
-          file={store.modelFile}
-          onDrop={onDropModel}
-          icon="🧠"
-        />
-        <DropZone
-          label="Dataset (.csv) — required"
-          accept={{ 'text/csv': ['.csv'] }}
-          file={store.datasetFile}
-          onDrop={onDropDataset}
-          icon="📊"
-        />
-      </motion.div>
-
-      {/* Protected columns */}
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
-        className="glass rounded-2xl p-5 border border-white/5 mb-4">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-display font-semibold text-white text-sm">Protected Attribute Columns</h3>
-          <button
-            onClick={() => { store.setProtectedCols(['gender', 'race', 'age_group']); store.setTargetCol('hired') }}
-            className="text-xs font-mono text-lens-light border border-lens/20 px-3 py-1 rounded-full hover:bg-lens/10 transition-all">
-            Load demo
-          </button>
-        </div>
-        <p className="text-white/25 text-xs mb-3">Columns containing demographic info: gender, race, age, nationality…</p>
-        <div className="flex flex-wrap gap-2 mb-3 min-h-[28px]">
-          {store.protectedCols.map(c => (
-            <ColTag key={c} col={c} onRemove={() => store.setProtectedCols(store.protectedCols.filter(x => x !== c))} />
+      {/* ── Dataset Source ──────────────────────────────────────────────── */}
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="mb-6">
+        <h3 className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Dataset Source</h3>
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          {DATASET_SOURCES.map(s => (
+            <button key={s.id} onClick={() => setDatasetSource(s.id)}
+              className={`text-left p-3 rounded-xl border transition-all
+                ${datasetSource === s.id ? 'border-lens/50 bg-lens/10' : 'border-white/8 hover:border-white/15'}`}>
+              <div className="text-base mb-1">{s.icon}</div>
+              <div className="text-xs font-mono font-semibold text-white mb-0.5">{s.label}</div>
+              <div className="text-xs text-white/30">{s.desc}</div>
+            </button>
           ))}
-          {!store.protectedCols.length && <span className="text-white/20 text-xs font-mono">None added yet</span>}
         </div>
-        <div className="flex gap-2">
-          <input value={newCol} onChange={e => setNewCol(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addCol()}
-            placeholder="e.g. gender"
-            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono"
-          />
-          <button onClick={addCol}
-            className="bg-lens/20 hover:bg-lens/30 border border-lens/30 text-lens-light px-4 rounded-xl text-sm transition-all">
-            Add
-          </button>
+
+        <AnimatePresence mode="wait">
+          <motion.div key={datasetSource} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+            {datasetSource === 'upload' && (
+              <DatasetDropZone file={store.datasetFile} onDrop={onDropDataset} />
+            )}
+            {datasetSource === 'url' && (
+              <div>
+                <input value={datasetUrl} onChange={e => setDatasetUrl(e.target.value)}
+                  placeholder="https://example.com/dataset.csv"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+                <p className="text-white/25 text-xs mt-2">Must be a direct link to a publicly accessible CSV file.</p>
+              </div>
+            )}
+            {datasetSource === 'huggingface' && (
+              <div>
+                <input value={hfDataset} onChange={e => setHfDataset(e.target.value)}
+                  placeholder="e.g. csv/csv or Rowan/hellaswag"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+                <p className="text-white/25 text-xs mt-2">Dataset name from <span className="text-lens-light">huggingface.co/datasets</span></p>
+              </div>
+            )}
+            {datasetSource === 'kaggle' && (
+              <div>
+                <input value={kaggleDataset} onChange={e => setKaggleDataset(e.target.value)}
+                  placeholder="e.g. dsinghania25/hiring-bias-dataset"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+                <p className="text-white/25 text-xs mt-2">Owner/dataset-name from <span className="text-lens-light">kaggle.com/datasets</span></p>
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
+      </motion.div>
+
+      {/* ── Model Type ──────────────────────────────────────────────────── */}
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="mb-6">
+        <h3 className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Model Type <span className="text-white/20 normal-case">(optional — dataset-only analysis also works)</span></h3>
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          {MODEL_TYPES.map(t => (
+            <button key={t.id} onClick={() => setModelType(t.id)}
+              className={`text-left p-3 rounded-xl border transition-all
+                ${modelType === t.id ? 'border-lens/50 bg-lens/10' : 'border-white/8 hover:border-white/15'}`}>
+              <div className="text-base mb-1">{t.icon}</div>
+              <div className="text-xs font-mono font-semibold text-white mb-0.5">{t.label}</div>
+              <div className="text-xs text-white/30">{t.desc}</div>
+            </button>
+          ))}
+        </div>
+
+        <AnimatePresence mode="wait">
+          <motion.div key={modelType} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+            {modelType === 'sklearn' && (
+              <DropZone file={store.modelFile} onDrop={onDropModel} />
+            )}
+            {modelType === 'api' && (
+              <input value={apiEndpoint} onChange={e => setApiEndpoint(e.target.value)}
+                placeholder="https://my-model-api.com"
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+            )}
+            {modelType === 'huggingface' && (
+              <div>
+                <input value={hfModel} onChange={e => setHfModel(e.target.value)}
+                  placeholder="e.g. distilbert-base-uncased-finetuned-sst-2-english"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+                <p className="text-white/25 text-xs mt-2">Your dataset must have a <span className="text-lens-light font-mono">text</span> column for HuggingFace models.</p>
+              </div>
+            )}
+            {modelType === 'vertex_ai' && (
+              <div className="space-y-3">
+                <input value={vertexEndpoint} onChange={e => setVertexEndpoint(e.target.value)}
+                  placeholder="Vertex AI Endpoint ID"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+                <input value={gcpProject} onChange={e => setGcpProject(e.target.value)}
+                  placeholder="GCP Project ID"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
+      </motion.div>
+
+      {/* ── Auto-detect notice ───────────────────────────────────────────── */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
+        className="glass rounded-2xl p-4 border border-lens/10 mb-8 flex items-start gap-3">
+        <div className="text-lens text-xl flex-shrink-0">✦</div>
+        <div>
+          <div className="text-lens-light font-mono text-xs font-semibold mb-1">Auto-detection enabled</div>
+          <div className="text-white/40 text-xs leading-relaxed">
+            FairLens will automatically scan your dataset columns, detect protected attributes
+            (gender, race, age, etc.), identify the target variable, and surface every bias it finds.
+            No manual column configuration needed.
+          </div>
         </div>
       </motion.div>
 
-      {/* Target column */}
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-        className="glass rounded-2xl p-5 border border-white/5 mb-8">
-        <h3 className="font-display font-semibold text-white text-sm mb-2">Target Column</h3>
-        <p className="text-white/25 text-xs mb-3">The column being predicted — e.g. hired, approved, risk_score</p>
-        <input value={store.targetCol} onChange={e => store.setTargetCol(e.target.value)}
-          placeholder="e.g. hired"
-          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-signal-green/50 font-mono"
-        />
-      </motion.div>
-
+      {/* Error */}
       <AnimatePresence>
         {store.error && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -172,18 +288,20 @@ export default function AuditPage() {
         )}
       </AnimatePresence>
 
+      {/* Loading */}
       <AnimatePresence>
         {store.loading && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             className="glass rounded-2xl p-5 border border-lens/20 mb-6">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-2 h-2 rounded-full bg-lens animate-pulse" />
-              <span className="text-lens-light font-mono text-sm">Running {runningStage}...</span>
+              <span className="text-lens-light font-mono text-sm">Running {runningStage} via Gemini 1.5 Pro...</span>
             </div>
             <div className="w-full bg-white/5 rounded-full h-1.5">
               <motion.div className="h-1.5 rounded-full bg-gradient-to-r from-lens to-lens-light"
                 animate={{ width: `${progress}%` }} transition={{ duration: 0.5 }} />
             </div>
+            <div className="text-white/25 text-xs font-mono mt-2">{progress}% — auto-detecting bias patterns</div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -197,11 +315,11 @@ export default function AuditPage() {
           ${canRun && !store.loading
             ? 'bg-lens hover:bg-lens/90 text-white glow-lens cursor-pointer'
             : 'bg-white/5 text-white/20 cursor-not-allowed'}`}>
-        {store.loading ? 'Analysing...' : 'Run Full Bias Audit →'}
+        {store.loading ? 'Analysing...' : 'Detect Biases Automatically →'}
       </motion.button>
 
       <p className="text-center text-white/20 text-xs mt-3 font-mono">
-        Powered by Gemini 1.5 Pro · Google Cloud · Model file optional
+        Powered by Gemini 1.5 Pro · Google Cloud · Auto-detects protected attributes
       </p>
     </div>
   )
