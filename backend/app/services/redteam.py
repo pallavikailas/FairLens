@@ -23,6 +23,7 @@ from typing import Dict, List, Any, Optional, AsyncGenerator
 import logging
 import json
 from datetime import datetime
+from sklearn.preprocessing import LabelEncoder
 
 from langgraph.graph import StateGraph, END
 from app.services.gemini_client import ask_gemini
@@ -60,6 +61,21 @@ class FairnessRedTeamAgent:
 
     def __init__(self):
         self.graph = self._build_graph()
+
+    @staticmethod
+    def _safe_predict(model, X: pd.DataFrame):
+        """Predict with automatic label-encoding fallback for categorical columns."""
+        try:
+            return model.predict(X)
+        except Exception:
+            X_enc = X.copy()
+            le = LabelEncoder()
+            for col in X_enc.select_dtypes(include=["object", "category"]).columns:
+                try:
+                    X_enc[col] = le.fit_transform(X_enc[col].astype(str))
+                except Exception:
+                    X_enc[col] = 0
+            return model.predict(X_enc.fillna(0))
 
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph agent workflow."""
@@ -187,7 +203,7 @@ class FairnessRedTeamAgent:
         for probe in probes:
             try:
                 features_df = pd.DataFrame([probe["features"]])
-                pred = model.predict(features_df)[0]
+                pred = self._safe_predict(model, features_df)[0]
                 prob = model.predict_proba(features_df)[0][1] if hasattr(model, 'predict_proba') else None
                 results.append({
                     **probe,
@@ -303,7 +319,7 @@ class FairnessRedTeamAgent:
 
         # Re-run predictions
         try:
-            y_pred_new = model.predict(X_train)
+            y_pred_new = self._safe_predict(model, X_train)
             y_prob_new = model.predict_proba(X_train)[:, 1] if hasattr(model, 'predict_proba') else None
 
             # Compare against confirmed biases

@@ -5,6 +5,7 @@ from typing import Optional
 import pandas as pd
 import numpy as np
 import pickle, io, uuid, json, httpx
+from sklearn.preprocessing import LabelEncoder
 
 from app.services.constitution import constitution_service
 from app.services.auto_detect import auto_detect_columns
@@ -89,8 +90,19 @@ async def generate_constitution(
         if model is not None:
             try:
                 y_pred = model.predict(X)
-            except Exception as e:
-                raise HTTPException(500, f"Model prediction failed: {e}")
+            except Exception:
+                # Fallback: label-encode categorical columns (needed for XGBoost/LightGBM)
+                try:
+                    X_enc = X.copy()
+                    le = LabelEncoder()
+                    for col in X_enc.select_dtypes(include=["object", "category"]).columns:
+                        try:
+                            X_enc[col] = le.fit_transform(X_enc[col].astype(str))
+                        except Exception:
+                            X_enc[col] = 0
+                    y_pred = model.predict(X_enc.fillna(0))
+                except Exception as e:
+                    raise HTTPException(500, f"Model prediction failed: {e}")
         else:
             # Dataset-only mode: use target column values as pseudo-predictions
             y_pred = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
