@@ -21,7 +21,7 @@ FairLens is a **model-agnostic** AI bias detection and remediation platform. It 
 | # | Stage | What it does |
 |---|-------|-------------|
 | ⬡ | **Bias Cartography** | Maps bias as a 2D topology across intersectional identity slices. Works with dataset only — no model required. Protected attributes and target column are **auto-detected by Gemini**. |
-| ◍ | **Counterfactual Constitution** | Uses Gemini 1.5 Pro to generate a structured document showing what the model would have decided if only demographics changed. When no model is provided, generates a dataset-only statistical analysis. |
+| ◍ | **Counterfactual Constitution** | Uses Gemini 2.0 Flash to generate a structured document showing what the model would have decided if only demographics changed. When no model is provided, generates a dataset-only statistical analysis. |
 | ◈ | **Proxy Variable Hunter** | Traces indirect proxy chains (zip code → race, job title → gender) using NetworkX knowledge graphs + Vertex AI embeddings. Requires only a dataset. |
 | ⊘ | **Red-Team Agent** | A LangGraph adversarial agent that attacks confirmed biases and applies mitigation patches — activated only after user confirmation. **Requires a model file.** |
 
@@ -94,7 +94,7 @@ flowchart TD
     subgraph STAGE2 ["◍ Stage 2 — Counterfactual Constitution"]
         FM --> CF[Counterfactual Pair Generation\nflip each protected attribute]
         CF --> PE[Pattern Extraction\nflip rates · probability deltas]
-        PE --> GM["✦ Gemini 1.5 Pro\nVertex AI synthesis"]
+        PE --> GM["✦ Gemini 2.0 Flash\nVertex AI synthesis"]
         GM --> CD[Constitution Document\n7 structured sections · Markdown]
     end
 
@@ -125,7 +125,7 @@ flowchart TD
     subgraph GCP ["☁ Google Cloud Platform"]
         BQ[(BigQuery\naudit trail & compliance logs)]
         GCS[(Cloud Storage\nmodel uploads & reports)]
-        VAI["✦ Vertex AI\nGemini 1.5 Pro · text-embedding-004"]
+        VAI["✦ Vertex AI\nGemini 2.0 Flash · text-embedding-004"]
         CR[Cloud Run\ncontainerised backend & frontend]
         AR[Artifact Registry\nDocker images]
         SM[Secret Manager\nAPI keys]
@@ -170,7 +170,7 @@ flowchart TD
 | Plugin System | `FairLensAdapter` — wraps any model type |
 | ML / XAI | SHAP, UMAP, DBSCAN, NetworkX, scikit-learn |
 | AI Agents | LangGraph, LangChain |
-| Google AI | **Gemini 1.5 Pro** (Constitution + Red-Team), **Vertex AI text-embedding-004** (Proxy Hunter) |
+| Google AI | **Gemini 2.0 Flash** (Constitution + Red-Team), **Vertex AI text-embedding-004** (Proxy Hunter) |
 | GCP Services | Cloud Run, Vertex AI, BigQuery, Cloud Storage, Artifact Registry, Secret Manager |
 | CI/CD | GitHub Actions → Artifact Registry → Cloud Run (Workload Identity Federation) |
 | IaC | Terraform |
@@ -297,7 +297,7 @@ That's it. The adapter pattern means FairLens never needs to know what your mode
 |-------|-------|
 | Challenge | [Unbiased AI Decision] Ensuring Fairness and Detecting Bias in Automated Decisions |
 | UN SDG Alignment | SDG 10 (Reduced Inequalities), SDG 16 (Justice & Strong Institutions) |
-| Google AI Used | Gemini 1.5 Pro via Vertex AI |
+| Google AI Used | Gemini 2.0 Flash via Vertex AI |
 | GCP Services | Cloud Run · Vertex AI · BigQuery · Cloud Storage · Artifact Registry · Secret Manager |
 | Deployed | `gcloud run deploy` via GitHub Actions on every push to `main` |
 

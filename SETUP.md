@@ -188,7 +188,7 @@ This creates `sample_model.pkl` and `sample_dataset.csv` in your backend directo
 
 FairLens auto-detects protected attributes (`gender`, `race`, `age`) and the target column (`hired`) from the dataset — no manual column configuration needed. The three analysis stages run sequentially. Once complete, you'll land on the Results page showing the bias topology map, counterfactual constitution, and proxy graph.
 
-> **Note:** Without a real GCP project, the Counterfactual Constitution stage (which calls Gemini 1.5 Pro) will return an error. Bias Cartography and Proxy Hunter run fully offline. If a model file is provided, the Constitution stage also skips Gemini and produces a dataset-level summary instead. To enable full Gemini-powered analysis, complete Part 3 below.
+> **Note:** Without a real GCP project, the Counterfactual Constitution stage (which calls Gemini 2.0 Flash) will return an error. Bias Cartography and Proxy Hunter run fully offline. If a model file is provided, the Constitution stage also skips Gemini and produces a dataset-level summary instead. To enable full Gemini-powered analysis, complete Part 3 below.
 
 ---
 
@@ -263,7 +263,7 @@ gcloud iam service-accounts keys create ./service-account-key.json \
   --iam-account=fairlens-backend@fairlens-gsc2026.iam.gserviceaccount.com
 ```
 
-Restart the backend — now the Constitution stage will call Gemini 1.5 Pro for real.
+Restart the backend — now the Constitution stage will call Gemini 2.0 Flash for real.
 
 ---
 
@@ -398,10 +398,10 @@ bq query --use_legacy_sql=false \
 
 All four stages now run on Cloud Run with:
 - Bias Cartography → Gemini-powered bias analysis (dataset-only, no SHAP/UMAP required)
-- Counterfactual Constitution → calls **Gemini 1.5 Pro** via Vertex AI (full counterfactuals when model provided; dataset-level analysis otherwise)
+- Counterfactual Constitution → calls **Gemini 2.0 Flash** via Vertex AI (full counterfactuals when model provided; dataset-level analysis otherwise)
 - Proxy Variable Hunter → calls **Vertex AI Embeddings** (text-embedding-004)
 - Audit logs written to **BigQuery**
-- Red-Team Agent → LangGraph + **Gemini 1.5 Pro**, streamed live via SSE *(model file required)*
+- Red-Team Agent → LangGraph + **Gemini 2.0 Flash**, streamed live via SSE *(model file required)*
 
 ---
 

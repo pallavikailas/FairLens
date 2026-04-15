@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     # Gemini — value injected at runtime from GCP Secret Manager
     # Secret name in GCP: fairlens-gemini-key
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-1.5-pro"
-    GEMINI_FLASH_MODEL: str = "gemini-1.5-flash"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_FLASH_MODEL: str = "gemini-2.0-flash"
 
     # BigQuery
     BIGQUERY_DATASET: str = "fairlens_audit"
