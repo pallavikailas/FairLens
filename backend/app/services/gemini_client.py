@@ -15,42 +15,67 @@ if settings.GEMINI_API_KEY:
 else:
     logger.warning("GEMINI_API_KEY not set — AI stages will fail. Get a free key at https://aistudio.google.com/app/apikey")
 
-_pro   = None
-_flash = None
+# Model fallback chain — tried in order until one succeeds
+_MODEL_FALLBACK_CHAIN = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+]
 
-def get_pro():
-    global _pro
-    if _pro is None:
-        _pro = genai.GenerativeModel(settings.GEMINI_MODEL)
-    return _pro
+_model_cache: dict = {}
 
-def get_flash():
-    global _flash
-    if _flash is None:
-        _flash = genai.GenerativeModel(settings.GEMINI_FLASH_MODEL)
-    return _flash
+
+def _get_model(name: str):
+    if name not in _model_cache:
+        _model_cache[name] = genai.GenerativeModel(name)
+    return _model_cache[name]
+
+
+def _candidate_models(preferred: str) -> list[str]:
+    """Return preferred model first, then the rest of the fallback chain."""
+    chain = [preferred] + [m for m in _MODEL_FALLBACK_CHAIN if m != preferred]
+    return chain
 
 
 async def ask_gemini(prompt: str, model: str = "pro", expect_json: bool = False) -> str:
-    """Send a prompt to Gemini and return the text response."""
-    m = get_pro() if model == "pro" else get_flash()
-    try:
-        response = m.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
-                temperature=0.2,
-                max_output_tokens=8192,
+    """
+    Send a prompt to Gemini and return the text response.
+    Automatically falls back through the model chain on 403/404 errors.
+    """
+    preferred = settings.GEMINI_MODEL if model == "pro" else settings.GEMINI_FLASH_MODEL
+    last_err = None
+
+    for model_name in _candidate_models(preferred):
+        try:
+            m = _get_model(model_name)
+            response = m.generate_content(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.2,
+                    max_output_tokens=8192,
+                )
             )
-        )
-        text = response.text
-        if expect_json:
-            # Strip markdown fences if present
-            text = re.sub(r"^```(?:json)?\n?", "", text.strip())
-            text = re.sub(r"\n?```$", "", text.strip())
-        return text
-    except Exception as e:
-        logger.error(f"Gemini API error: {e}")
-        raise
+            if model_name != preferred:
+                logger.info(f"Gemini: fell back to '{model_name}' (primary '{preferred}' unavailable)")
+            text = response.text
+            if expect_json:
+                text = re.sub(r"^```(?:json)?\n?", "", text.strip())
+                text = re.sub(r"\n?```$", "", text.strip())
+            return text
+        except Exception as e:
+            err_str = str(e)
+            # Only fall through for access/availability errors
+            if any(code in err_str for code in ("403", "404", "denied", "not found", "unavailable", "no longer available")):
+                logger.warning(f"Gemini model '{model_name}' unavailable ({err_str[:120]}), trying next...")
+                last_err = e
+                continue
+            # For other errors (bad request, rate limit, etc.) raise immediately
+            logger.error(f"Gemini API error with model '{model_name}': {e}")
+            raise
+
+    logger.error(f"All Gemini models exhausted. Last error: {last_err}")
+    raise last_err
 
 
 async def ask_gemini_json(prompt: str, model: str = "flash") -> dict:
@@ -59,7 +84,6 @@ async def ask_gemini_json(prompt: str, model: str = "flash") -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Try to extract JSON from the response
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             return json.loads(match.group())
