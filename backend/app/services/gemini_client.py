@@ -1,6 +1,7 @@
 """
 Central Gemini client — all four FairLens stages use this.
-Calls the Gemini REST API directly via httpx (v1 stable endpoint, not v1beta).
+Calls the Gemini REST API directly via httpx.
+Tries v1 (stable, versioned names) then v1beta (generic names) in a fallback chain.
 Set GEMINI_API_KEY in .env — get one free at https://aistudio.google.com/app/apikey
 """
 import httpx
@@ -17,34 +18,32 @@ if not settings.GEMINI_API_KEY:
         "Get a free key at https://aistudio.google.com/app/apikey"
     )
 
-# Stable v1 endpoint — avoids the v1beta model availability issues
-_BASE_URL = "https://generativelanguage.googleapis.com/v1/models"
+_BASE = "https://generativelanguage.googleapis.com"
 
-# Model fallback chain — tried in order until one succeeds
-_MODEL_FALLBACK_CHAIN = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
+# Each entry is (api_version, model_name).
+# v1 requires versioned names (e.g. -001); v1beta accepts generic aliases.
+# Tried in order until one returns 200.
+_CANDIDATES = [
+    ("v1",    "gemini-2.0-flash-001"),
+    ("v1",    "gemini-1.5-flash-001"),
+    ("v1",    "gemini-1.5-flash-002"),
+    ("v1beta","gemini-2.5-flash"),
+    ("v1beta","gemini-2.0-flash"),
+    ("v1beta","gemini-1.5-flash"),
+    ("v1beta","gemini-1.5-pro"),
 ]
-
-
-def _candidate_models(preferred: str) -> list[str]:
-    return [preferred] + [m for m in _MODEL_FALLBACK_CHAIN if m != preferred]
 
 
 async def ask_gemini(prompt: str, model: str = "pro", expect_json: bool = False) -> str:
     """
     Send a prompt to Gemini and return the text response.
-    Uses the v1 stable REST API directly.
-    Automatically falls back through the model chain on 403/404 errors.
+    Falls back through v1 versioned names then v1beta generic names until one works.
     """
-    preferred = settings.GEMINI_MODEL if model == "pro" else settings.GEMINI_FLASH_MODEL
     last_err = None
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        for model_name in _candidate_models(preferred):
-            url = f"{_BASE_URL}/{model_name}:generateContent"
+        for api_version, model_name in _CANDIDATES:
+            url = f"{_BASE}/{api_version}/models/{model_name}:generateContent"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
@@ -62,8 +61,7 @@ async def ask_gemini(prompt: str, model: str = "pro", expect_json: bool = False)
 
                 if resp.status_code in (403, 404):
                     logger.warning(
-                        f"Gemini model '{model_name}' unavailable "
-                        f"(HTTP {resp.status_code}), trying next..."
+                        f"Gemini {api_version}/{model_name}: HTTP {resp.status_code}, trying next..."
                     )
                     last_err = Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
                     continue
@@ -71,9 +69,7 @@ async def ask_gemini(prompt: str, model: str = "pro", expect_json: bool = False)
                 resp.raise_for_status()
                 data = resp.json()
 
-                if model_name != preferred:
-                    logger.info(f"Gemini: fell back to '{model_name}' (primary '{preferred}' unavailable)")
-
+                logger.debug(f"Gemini: using {api_version}/{model_name}")
                 text = data["candidates"][0]["content"]["parts"][0]["text"]
 
                 if expect_json:
@@ -82,15 +78,17 @@ async def ask_gemini(prompt: str, model: str = "pro", expect_json: bool = False)
 
                 return text
 
-            except httpx.HTTPStatusError as e:
-                logger.error(f"Gemini HTTP error with model '{model_name}': {e}")
-                raise
             except (KeyError, IndexError) as e:
-                logger.error(f"Unexpected Gemini response structure: {data}")
+                logger.error(f"Unexpected Gemini response from {api_version}/{model_name}: {data}")
                 raise ValueError(f"Could not parse Gemini response: {e}") from e
+            except httpx.HTTPStatusError as e:
+                logger.error(f"Gemini HTTP error ({api_version}/{model_name}): {e}")
+                raise
 
-    logger.error(f"All Gemini models exhausted. Last error: {last_err}")
-    raise last_err or RuntimeError("All Gemini models failed")
+    # All candidates exhausted
+    key_hint = "GEMINI_API_KEY is not set" if not settings.GEMINI_API_KEY else "check your API key at https://aistudio.google.com/app/apikey"
+    logger.error(f"All Gemini models exhausted. {key_hint}. Last error: {last_err}")
+    raise last_err or RuntimeError(f"All Gemini models failed — {key_hint}")
 
 
 async def ask_gemini_json(prompt: str, model: str = "flash") -> dict:
