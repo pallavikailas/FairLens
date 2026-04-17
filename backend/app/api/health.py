@@ -18,30 +18,25 @@ async def ready():
 
 @router.get("/gemini")
 async def gemini_diagnostic():
-    """Test Gemini connectivity. Visit /health/gemini to debug API key issues."""
-    if not settings.GEMINI_API_KEY:
-        return {
-            "key_set": False,
-            "error": "GEMINI_API_KEY is not set",
-            "fix": "Set GEMINI_API_KEY in your .env or Cloud Run env vars",
-        }
-
+    """Test Vertex AI / Gemini connectivity. Visit /health/gemini to debug."""
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        import vertexai
+        from vertexai.generative_models import GenerativeModel
+        vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.VERTEX_AI_LOCATION)
+        model = GenerativeModel(settings.GEMINI_MODEL)
         response = await model.generate_content_async("Say OK")
         return {
-            "key_set": True,
-            "key_prefix": settings.GEMINI_API_KEY[:8] + "...",
-            "model": "gemini-2.5-flash",
+            "project": settings.GOOGLE_CLOUD_PROJECT,
+            "location": settings.VERTEX_AI_LOCATION,
+            "model": settings.GEMINI_MODEL,
             "status": "ok",
             "response": response.text.strip(),
         }
     except Exception as e:
         return {
-            "key_set": True,
-            "key_prefix": settings.GEMINI_API_KEY[:8] + "...",
+            "project": settings.GOOGLE_CLOUD_PROJECT,
+            "model": settings.GEMINI_MODEL,
             "status": "error",
             "error": str(e),
+            "fix": "Run `gcloud auth application-default login` locally, or ensure the Cloud Run service account has roles/aiplatform.user",
         }

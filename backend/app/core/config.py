@@ -1,7 +1,4 @@
-"""
-FairLens Config — reads from environment variables and GCP Secret Manager.
-All fields have safe defaults so the app never crashes on missing optional settings.
-"""
+"""FairLens config — reads from environment variables."""
 from pydantic_settings import BaseSettings
 from typing import List
 
@@ -16,13 +13,10 @@ class Settings(BaseSettings):
     GOOGLE_CLOUD_REGION: str = "us-central1"
     GCS_BUCKET_NAME: str = "fairlens-models"
 
-    # Vertex AI
+    # Vertex AI — used for Gemini 2.5 Flash and text embeddings
     VERTEX_AI_LOCATION: str = "us-central1"
     VERTEX_EMBEDDING_MODEL: str = "text-embedding-004"
-
-    # Gemini — value injected at runtime from GCP Secret Manager
-    # Secret name in GCP: fairlens-gemini-key
-    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
 
     # BigQuery
     BIGQUERY_DATASET: str = "fairlens_audit"
@@ -48,7 +42,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
-        extra = "ignore"   # never crash on unexpected env vars
+        extra = "ignore"
 
 
 settings = Settings()
