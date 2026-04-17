@@ -98,7 +98,7 @@ If uncertain about a column, include it in protected_cols (better to over-includ
 If no clear target column, pick the binary/categorical column most likely to be a decision outcome."""
 
     try:
-        result = await ask_gemini_json(prompt, model="flash")
+        result = await ask_gemini_json(prompt)
         logger.info(f"[{audit_id}] Gemini detection: {result}")
 
         # Merge with fast detection results

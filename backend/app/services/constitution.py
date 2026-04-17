@@ -1,8 +1,8 @@
 """
 Counterfactual Constitution Service
 =====================================
-Uses Gemini 1.5 Pro to generate a structured 'constitution' document that
-captures what the model would have decided if demographic attributes were different.
+Uses Gemini to generate a structured 'constitution' document that captures
+what the model would have decided if demographic attributes were different.
 
 Key innovation:
 - Not just individual counterfactuals, but a VERSIONED DOCUMENT that captures
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class CounterfactualConstitutionService:
     """
-    Generates the Counterfactual Constitution via Gemini 1.5 Pro.
+    Generates the Counterfactual Constitution via Gemini.
     The constitution answers: "What implicit rules is this model following,
     and how do those rules change when demographics change?"
     Uses the central gemini_client (API-key based) — no Vertex AI IAM required.
@@ -177,10 +177,7 @@ class CounterfactualConstitutionService:
         audit_id: str,
         model_available: bool = True,
     ) -> str:
-        """
-        Use Gemini 1.5 Pro to synthesise patterns + counterfactuals
-        into a structured, readable Constitution document.
-        """
+        """Use Gemini to synthesise patterns + counterfactuals into a Constitution document."""
         hotspots_summary = json.dumps(
             cartography_results.get("hotspots", [])[:3], indent=2
         )
@@ -237,7 +234,7 @@ Write in clear, accessible language. Use specific numbers from the data.
 Make it readable for both a non-technical HR manager and a data scientist.
 Use markdown formatting."""
 
-        return await ask_gemini(prompt, model="pro")
+        return await ask_gemini(prompt)
 
     def _parse_constitution(self, markdown_text: str) -> List[Dict]:
         """Parse markdown sections into structured JSON."""

@@ -1,13 +1,12 @@
 """
 Bias Cartography Service — Cloud-Native (Gemini-powered)
 =========================================================
-No SHAP. No UMAP. No local ML libraries.
+No SHAP. No UMAP.
 
-Sends the dataset to Gemini 1.5 Pro which:
 1. Computes statistical bias metrics per demographic slice
 2. Identifies intersectional bias patterns
-3. Generates 2D topology coordinates via embedding similarity
-4. Returns hotspot clusters with plain-English explanations
+3. Generates 2D topology coordinates via bias score + prediction scatter
+4. Returns hotspot clusters with plain-English explanations via Gemini
 """
 
 import pandas as pd
@@ -16,7 +15,7 @@ import json
 import logging
 from typing import Dict, List, Any, Optional
 
-from app.services.gemini_client import ask_gemini_json, ask_gemini
+from app.services.gemini_client import ask_gemini_json
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -122,7 +121,7 @@ TOP BIAS FINDINGS: {top_slices}
 Return ONLY this JSON:
 {{"severity":"critical|high|medium|low","headline":"one sentence","key_findings":["f1","f2","f3"],"most_affected_group":"group","bias_type":"direct|proxy|intersectional|systemic","real_world_impact":"impact","legal_risk":"risk","recommended_action":"action"}}"""
         try:
-            return await ask_gemini_json(prompt, model="flash")
+            return await ask_gemini_json(prompt)
         except Exception as e:
             logger.warning(f"Gemini analysis failed: {e}")
             return {"severity": "unknown", "headline": "Analysis unavailable", "key_findings": []}

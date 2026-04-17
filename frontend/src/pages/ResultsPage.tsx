@@ -184,7 +184,7 @@ export default function ResultsPage() {
 
   const confirmedBiases = [
     ...(carto?.slice_metrics?.filter((m: any) => m.flagged).map((m: any) => ({
-      attribute: m.attributes ? Object.keys(m.attributes)[0] : 'unknown',
+      attribute: m.attribute || 'unknown',
       type: 'demographic_parity',
       label: m.label,
       spd: m.statistical_parity_diff,

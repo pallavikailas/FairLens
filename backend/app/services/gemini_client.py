@@ -1,7 +1,7 @@
 """
 Central Gemini client — all four FairLens stages use this.
 Calls the Gemini REST API directly via httpx.
-Tries v1 (stable, versioned names) then v1beta (generic names) in a fallback chain.
+Tries v1beta generic names first (broadest API key compatibility), then v1 versioned names.
 Set GEMINI_API_KEY in .env — get one free at https://aistudio.google.com/app/apikey
 """
 import httpx
@@ -21,23 +21,22 @@ if not settings.GEMINI_API_KEY:
 _BASE = "https://generativelanguage.googleapis.com"
 
 # Each entry is (api_version, model_name).
-# v1 requires versioned names (e.g. -001); v1beta accepts generic aliases.
+# v1beta generic aliases work with all API key tiers; v1 versioned names require GA access.
 # Tried in order until one returns 200.
 _CANDIDATES = [
-    ("v1",    "gemini-2.0-flash-001"),
-    ("v1",    "gemini-1.5-flash-001"),
-    ("v1",    "gemini-1.5-flash-002"),
-    ("v1beta","gemini-2.5-flash"),
-    ("v1beta","gemini-2.0-flash"),
-    ("v1beta","gemini-1.5-flash"),
-    ("v1beta","gemini-1.5-pro"),
+    ("v1beta", "gemini-2.5-flash"),
+    ("v1beta", "gemini-2.0-flash"),
+    ("v1beta", "gemini-1.5-flash"),
+    ("v1",     "gemini-2.0-flash-001"),
+    ("v1",     "gemini-1.5-flash-001"),
+    ("v1",     "gemini-1.5-flash-002"),
 ]
 
 
-async def ask_gemini(prompt: str, model: str = "pro", expect_json: bool = False) -> str:
+async def ask_gemini(prompt: str, expect_json: bool = False) -> str:
     """
     Send a prompt to Gemini and return the text response.
-    Falls back through v1 versioned names then v1beta generic names until one works.
+    Falls back through the candidate list until one model returns 200.
     """
     last_err = None
 
@@ -59,7 +58,7 @@ async def ask_gemini(prompt: str, model: str = "pro", expect_json: bool = False)
                     headers={"Content-Type": "application/json"},
                 )
 
-                if resp.status_code in (403, 404):
+                if resp.status_code in (400, 403, 404):
                     logger.warning(
                         f"Gemini {api_version}/{model_name}: HTTP {resp.status_code}, trying next..."
                     )
@@ -91,9 +90,9 @@ async def ask_gemini(prompt: str, model: str = "pro", expect_json: bool = False)
     raise last_err or RuntimeError(f"All Gemini models failed — {key_hint}")
 
 
-async def ask_gemini_json(prompt: str, model: str = "flash") -> dict:
+async def ask_gemini_json(prompt: str) -> dict:
     """Ask Gemini and parse the response as JSON."""
-    text = await ask_gemini(prompt, model=model, expect_json=True)
+    text = await ask_gemini(prompt, expect_json=True)
     try:
         return json.loads(text)
     except json.JSONDecodeError:

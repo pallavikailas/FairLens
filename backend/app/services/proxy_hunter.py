@@ -3,10 +3,8 @@ Proxy Variable Hunter
 ======================
 Detects INDIRECT correlations between seemingly neutral features and protected attributes.
 
-Key insight: SHAP cannot tell you that "zip_code" is a proxy for "race" because
-it treats features independently. We build a knowledge graph where edges represent
-statistical dependence, then use Vertex AI embeddings + graph traversal to find
-hidden proxy chains.
+Builds a dependency graph where edges represent statistical dependence, then uses
+graph traversal to find hidden proxy chains.
 
 E.g.:  zip_code → neighborhood_income → race  (3-hop proxy)
        job_title → years_of_experience → gender (2-hop proxy)
@@ -15,12 +13,10 @@ E.g.:  zip_code → neighborhood_income → race  (3-hop proxy)
 import pandas as pd
 import numpy as np
 import networkx as nx
-from scipy.stats import chi2_contingency, pointbiserialr
+from scipy.stats import chi2_contingency
 from sklearn.preprocessing import LabelEncoder
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 import logging
-
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +34,8 @@ class ProxyVariableHunter:
 
     def __init__(self):
         self.graph = nx.DiGraph()
-        self.embedding_model = None  # semantic enrichment via Vertex AI disabled; correlation graph is sufficient
 
-    async def hunt_proxies(
+    def hunt_proxies(
         self,
         X: pd.DataFrame,
         protected_cols: List[str],
@@ -58,13 +53,10 @@ class ProxyVariableHunter:
         # Step 2: Find proxy chains (paths from neutral features → protected attributes)
         proxy_chains = self._find_proxy_chains(protected_cols, X.columns.tolist())
 
-        # Step 3: Semantic enrichment via Vertex AI embeddings
-        enriched_chains = await self._enrich_with_semantics(proxy_chains)
+        # Step 3: Risk score each chain
+        risk_scored = self._score_proxy_risk(proxy_chains, X, protected_cols)
 
-        # Step 4: Risk score each chain
-        risk_scored = self._score_proxy_risk(enriched_chains, X, protected_cols)
-
-        # Step 5: Recommend which features to audit/remove
+        # Step 4: Recommend which features to audit/remove
         recommendations = self._generate_recommendations(risk_scored)
 
         result = {
@@ -186,31 +178,6 @@ class ProxyVariableHunter:
                     continue
 
         return sorted(chains, key=lambda c: c["chain_strength"], reverse=True)[:50]
-
-    async def _enrich_with_semantics(self, chains: List[Dict]) -> List[Dict]:
-        """
-        Use Vertex AI text embeddings to semantically score how 'proxy-like'
-        a feature name is for a protected attribute.
-        E.g., 'neighborhood' is semantically close to 'race' in embedding space.
-        """
-        if not self.embedding_model or not chains:
-            return chains
-
-        enriched = []
-        for chain in chains:
-            try:
-                texts = [chain["start_feature"], chain["target_protected"]]
-                embeddings = self.embedding_model.get_embeddings(texts)
-                emb_a = np.array(embeddings[0].values)
-                emb_b = np.array(embeddings[1].values)
-                # Cosine similarity
-                semantic_sim = float(np.dot(emb_a, emb_b) / (np.linalg.norm(emb_a) * np.linalg.norm(emb_b)))
-                chain["semantic_similarity"] = round(semantic_sim, 3)
-            except Exception:
-                chain["semantic_similarity"] = 0.0
-            enriched.append(chain)
-
-        return enriched
 
     def _score_proxy_risk(self, chains: List[Dict], X: pd.DataFrame, protected_cols: List[str]) -> List[Dict]:
         """Score each proxy chain by risk level (critical / high / medium / low)."""

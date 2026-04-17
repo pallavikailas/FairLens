@@ -330,11 +330,6 @@ class FairnessRedTeamAgent:
                     validation["improved"].append(attr)
                     continue
 
-                for val in X_train[attr].unique():
-                    mask = X_train[attr] == val
-                    if mask.sum() == 0:
-                        continue
-
                 old_disparity = e.get("disparity", 0)
                 if y_prob_new is not None:
                     new_disparities = []

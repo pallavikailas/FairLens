@@ -64,7 +64,7 @@ async def hunt_proxies(
                 tgt = df.columns[-1]
 
         X = df[[c for c in df.columns if c != tgt]]
-        result = await proxy_hunter_service.hunt_proxies(X, protected, audit_id)
+        result = proxy_hunter_service.hunt_proxies(X, protected, audit_id)
         return JSONResponse(content=result)
     except HTTPException:
         raise
