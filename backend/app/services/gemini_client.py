@@ -7,6 +7,7 @@ Authentication:
 
 No API key required — uses Google Application Default Credentials.
 """
+import asyncio
 import logging
 import json
 import re
@@ -34,8 +35,14 @@ async def ask_gemini(prompt: str, expect_json: bool = False) -> str:
             settings.GEMINI_MODEL,
             generation_config=_generation_config,
         )
-        response = await model.generate_content_async(prompt)
+        response = await asyncio.wait_for(
+            model.generate_content_async(prompt),
+            timeout=55.0,
+        )
         text = response.text
+    except asyncio.TimeoutError:
+        logger.error("Gemini timed out after 55 seconds")
+        raise RuntimeError("Gemini timed out after 55 seconds")
     except GoogleAPIError as e:
         logger.error(f"Gemini API error: {e}")
         raise
