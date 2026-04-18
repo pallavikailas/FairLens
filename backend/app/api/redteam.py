@@ -2,7 +2,9 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import Optional, List
-import pandas as pd, numpy as np, pickle, io, uuid, json, asyncio, httpx
+import pandas as pd, numpy as np, pickle, io, uuid, json, asyncio
+
+from app.services.dataset_loader import load_dataset_csv
 
 router = APIRouter()
 
@@ -24,27 +26,6 @@ def _resolve_feature_cols(model, df: pd.DataFrame, fallback_target: str) -> List
         except Exception:
             pass
     return [c for c in df.columns if c != fallback_target]
-
-
-async def _load_dataset(
-    dataset_file: Optional[UploadFile],
-    dataset_source: str,
-    dataset_url: str,
-) -> str:
-    """Load dataset CSV from upload or remote URL."""
-    if dataset_source == "upload" or not dataset_url:
-        if not dataset_file:
-            raise HTTPException(400, "dataset_file is required when dataset_source is 'upload'")
-        raw = await dataset_file.read()
-        return raw.decode("utf-8", errors="replace")
-    elif dataset_source in ("url", "huggingface", "kaggle"):
-        if not dataset_url:
-            raise HTTPException(400, "dataset_url required for non-upload dataset sources")
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(dataset_url)
-            resp.raise_for_status()
-            return resp.text
-    raise HTTPException(400, "No valid dataset source provided")
 
 
 @router.post("/run")
@@ -82,7 +63,7 @@ async def run_redteam(
         except Exception as e:
             raise HTTPException(400, f"Failed to load model file: {e}")
 
-    dataset_csv = await _load_dataset(dataset_file, dataset_source, dataset_url)
+    dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
     df = pd.read_csv(io.StringIO(dataset_csv))
 
     # Resolve protected_cols and target_col — handle 'auto' sentinel

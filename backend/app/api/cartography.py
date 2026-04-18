@@ -12,6 +12,7 @@ from sklearn.preprocessing import LabelEncoder
 
 from app.services.cartography import cartography_service
 from app.services.auto_detect import auto_detect_columns
+from app.services.dataset_loader import load_dataset_csv
 
 logger = logging.getLogger(__name__)
 
@@ -47,71 +48,6 @@ def _resolve_feature_cols(model, df: pd.DataFrame, fallback_target: str) -> List
     return [c for c in df.columns if c != fallback_target]
 
 
-async def _load_csv_string(
-    dataset_file: Optional[UploadFile],
-    dataset_source: str,
-    dataset_url: str,
-) -> str:
-    """Load dataset from any source, return as CSV string."""
-
-    if dataset_source == "upload" or not dataset_url:
-        if not dataset_file:
-            raise HTTPException(400, "dataset_file required for upload source")
-        raw = await dataset_file.read()
-        return raw.decode("utf-8", errors="replace")
-
-    elif dataset_source == "url":
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(dataset_url)
-            resp.raise_for_status()
-            return resp.text
-
-    elif dataset_source == "huggingface":
-        name = dataset_url.strip()
-        async with httpx.AsyncClient(timeout=30) as client:
-            # Auto-discover config and split
-            info_resp = await client.get(
-                f"https://datasets-server.huggingface.co/info?dataset={name}"
-            )
-            config, split = "default", "train"
-            if info_resp.status_code == 200:
-                info = info_resp.json()
-                configs = list(info.get("dataset_info", {}).keys())
-                if configs:
-                    config = configs[0]
-                splits = list(
-                    info.get("dataset_info", {})
-                    .get(config, {})
-                    .get("splits", {})
-                    .keys()
-                )
-                if splits:
-                    split = splits[0]
-
-            rows_resp = await client.get(
-                f"https://datasets-server.huggingface.co/rows"
-                f"?dataset={name}&config={config}&split={split}&offset=0&length=500"
-            )
-            if rows_resp.status_code != 200:
-                raise HTTPException(
-                    400,
-                    f"Could not load HuggingFace dataset '{name}'. "
-                    f"Try downloading the CSV from huggingface.co/datasets/{name} and uploading it."
-                )
-            data = rows_resp.json()
-            rows = data.get("rows", [])
-            if not rows:
-                raise HTTPException(400, f"HuggingFace dataset '{name}' returned no rows.")
-            df = pd.DataFrame([r["row"] for r in rows])
-            return df.to_csv(index=False)
-
-    elif dataset_source == "kaggle":
-        raise HTTPException(
-            400,
-            "Kaggle requires authentication. Please download the CSV from Kaggle and upload it directly."
-        )
-
-    raise HTTPException(400, "No valid dataset source provided")
 
 
 @router.post("/analyze")
@@ -130,7 +66,7 @@ async def analyze_bias_cartography(
     audit_id = str(uuid.uuid4())[:8]
     try:
         # 1. Load dataset as CSV string
-        dataset_csv = await _load_csv_string(dataset_file, dataset_source, dataset_url)
+        dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
 
         # 2. Auto-detect or use provided columns
         is_auto = protected_cols in ("auto", "", "['auto']") or "auto" in protected_cols.split(",")
