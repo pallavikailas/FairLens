@@ -118,8 +118,13 @@ class CounterfactualConstitutionService:
                 # Batch original + all counterfactuals so the encoder sees ALL values
                 # for this column at once — prevents fresh single-row LabelEncoders
                 # from mapping every value to 0 (making flips invisible to the model).
-                batch_rows = [row] + [dict(**row, **{col: v}) for v in other_vals]
-                batch_df = pd.DataFrame(batch_rows)
+                row_dict = row.to_dict()
+                cf_rows = []
+                for v in other_vals:
+                    cf = row_dict.copy()
+                    cf[col] = v
+                    cf_rows.append(cf)
+                batch_df = pd.DataFrame([row_dict] + cf_rows)
 
                 try:
                     batch_preds = model.predict(batch_df)
