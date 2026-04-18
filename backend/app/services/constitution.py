@@ -58,14 +58,10 @@ class CounterfactualConstitutionService:
         patterns = self._extract_patterns(cf_pairs, protected_cols)
 
         # Step 3: Gemini synthesis
-        try:
-            constitution_text = await self._gemini_synthesise(
-                patterns, cf_pairs, cartography_results, protected_cols, feature_names, audit_id,
-                model_available=(model is not None),
-            )
-        except Exception as e:
-            logger.warning(f"[{audit_id}] Gemini synthesis failed: {e}")
-            constitution_text = self._fallback_constitution(patterns, protected_cols)
+        constitution_text = await self._gemini_synthesise(
+            patterns, cf_pairs, cartography_results, protected_cols, feature_names, audit_id,
+            model_available=(model is not None),
+        )
 
         # Step 4: Parse into structured sections
         sections = self._parse_constitution(constitution_text)
@@ -239,36 +235,6 @@ Make it readable for both a non-technical HR manager and a data scientist.
 Use markdown formatting."""
 
         return await ask_gemini(prompt)
-
-    def _fallback_constitution(self, patterns: List[Dict], protected_cols: List[str]) -> str:
-        lines = [
-            "## 1. Executive Summary",
-            "Gemini analysis is temporarily unavailable. The summary below is derived from statistical patterns only.",
-            "",
-            "## 2. Implicit Decision Rules",
-            "Full rule synthesis requires Gemini. Raw patterns are available in the `patterns` field.",
-            "",
-            "## 3. Demographic Sensitivity Index",
-        ]
-        for p in patterns:
-            lines.append(f"- **{p['attribute']}**: flip rate {p['flip_rate']:.1%}, severity {p['severity']}")
-        if not patterns:
-            lines.append("No counterfactual patterns computed (no model provided).")
-        lines += [
-            "",
-            "## 4. Most Affected Groups",
-            "Analysis unavailable — Gemini synthesis failed.",
-            "",
-            "## 5. Structural vs. Proxy Bias",
-            "Analysis unavailable — Gemini synthesis failed.",
-            "",
-            "## 6. Legal Risk Assessment",
-            "Analysis unavailable — Gemini synthesis failed.",
-            "",
-            "## 7. Recommended Remediation Priority",
-            "Analysis unavailable — Gemini synthesis failed. Review the proxy hunter results for actionable findings.",
-        ]
-        return "\n".join(lines)
 
     def _parse_constitution(self, markdown_text: str) -> List[Dict]:
         """Parse markdown sections into structured JSON."""
