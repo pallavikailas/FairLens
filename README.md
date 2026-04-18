@@ -14,16 +14,16 @@
 
 FairLens is a **model-agnostic** AI bias detection and remediation platform. It works as a **plugin for any model** — scikit-learn, PyTorch, TensorFlow, HuggingFace, a REST API, or a Vertex AI endpoint — and runs it through a four-stage pipeline that identifies, maps, explains, and fixes hidden bias.
 
-**A model file is optional for stages 1–3.** Upload only a CSV dataset and FairLens will auto-detect protected attributes, run Bias Cartography, generate a dataset-level Constitution, and trace proxy chains without any model. A model is required only for Stage 4 (Red-Team adversarial probing).
+**A model file is optional for all stages.** Upload only a CSV dataset and FairLens will auto-detect protected attributes, run Bias Cartography, auto-train a reference model for counterfactual simulation, and trace proxy chains — no manual configuration needed. A model enables deeper analysis; without one, FairLens trains its own Logistic Regression reference to reveal data-level bias.
 
 ### The Four Stages
 
 | # | Stage | What it does |
 |---|-------|-------------|
-| ⬡ | **Bias Cartography** | Maps bias as a 2D topology across intersectional identity slices. Works with dataset only — no model required. Protected attributes and target column are **auto-detected by Gemini**. |
-| ◍ | **Counterfactual Constitution** | Uses Gemini 2.5 Flash to generate a structured document showing what the model would have decided if only demographics changed. When no model is provided, generates a dataset-only statistical analysis. |
+| ⬡ | **Bias Cartography** | Maps bias as a 2D topology across intersectional identity slices. Works with dataset only — no model required. Protected attributes and target column are **auto-detected by Gemini**. When a model is provided, uses its actual predictions instead of ground-truth labels. |
+| ◍ | **Counterfactual Constitution** | Uses Gemini 2.5 Flash to generate a structured document showing what the model would decide if only demographics changed. **When no model is provided, FairLens auto-trains a Logistic Regression reference model** so counterfactual simulation always runs. |
 | ◈ | **Proxy Variable Hunter** | Traces indirect proxy chains (zip code → race, job title → gender) using NetworkX knowledge graphs + Vertex AI embeddings. Requires only a dataset. |
-| ⊘ | **Red-Team Agent** | A LangGraph adversarial agent that attacks confirmed biases and applies mitigation patches — activated only after user confirmation. **Requires a model file.** |
+| ⊘ | **Red-Team Agent** | A LangGraph adversarial agent that attacks confirmed biases and applies mitigation patches — activated only after user confirmation. Works best with a provided model. |
 
 ---
 
@@ -60,6 +60,43 @@ adapter = FairLensAdapter.from_pickle("model.pkl")
 ```
 
 All adapters expose the same interface: `predict(X)`, `predict_proba(X)`, `get_shap_explainer(X_background)`.
+
+---
+
+## Testing with Biased Datasets & Models
+
+Use these known-biased sources to verify FairLens is working correctly.
+
+### Biased HuggingFace Datasets
+
+Enter these in the **HuggingFace Dataset** source field:
+
+| Dataset ID | Why it's biased |
+|---|---|
+| `mstz/adult` | UCI Adult income — strong gender & race bias in income prediction (classic benchmark) |
+| `iamollas/folktables` | US Census ACS — measurable racial income/employment disparities |
+| `LabHC/bias_in_bios` | Profession prediction from biographies — heavy gender bias (doctors → male, nurses → female). Has a `text` column, works with HuggingFace models. |
+
+### Biased HuggingFace Models
+
+Enter these in the **HuggingFace** model type field (requires dataset with a `text` column):
+
+| Model ID | Known bias |
+|---|---|
+| `unitary/toxic-bert` | Toxicity detection — flags African-American dialect at higher false-positive rates |
+| `cardiffnlp/twitter-roberta-base-sentiment` | Sentiment analysis — racially disparate predictions on semantically identical text |
+| `valurank/distilroberta-base-offensive-language-identification` | Offensive language — documented racial bias in false-positive rate |
+
+### Best end-to-end test
+
+Dataset: `LabHC/bias_in_bios` (has `text` + `gender` columns)  
+Model type: HuggingFace → `unitary/toxic-bert`
+
+This combination exercises the full pipeline including counterfactual simulation, because the dataset has both a `text` column (required for HuggingFace inference) and a `gender` protected attribute for bias measurement.
+
+### Auto-reference model (dataset-only)
+
+If you upload only a CSV with no model, FairLens auto-trains a **Logistic Regression reference model** on your data. The counterfactual constitution then shows what bias a naive model would inherit from the training data — revealing data-level discrimination before any real model is deployed.
 
 ---
 

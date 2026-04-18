@@ -78,13 +78,16 @@ async def generate_constitution(
             model_bytes = await model_file.read()
             if model_bytes:
                 try:
-                    model = pickle.loads(model_bytes)
+                    raw = pickle.loads(model_bytes)
                 except Exception:
                     try:
                         import joblib
-                        model = joblib.load(io.BytesIO(model_bytes))
+                        raw = joblib.load(io.BytesIO(model_bytes))
                     except Exception as e:
                         raise HTTPException(400, f"Failed to load model file: {e}")
+                # Always wrap raw models so predict auto-encodes categoricals consistently
+                from app.services.model_adapter import FairLensAdapter
+                model = FairLensAdapter.auto_detect(raw)
 
         elif model_type == "huggingface" and api_endpoint:
             try:
@@ -107,7 +110,55 @@ async def generate_constitution(
         feature_cols = _resolve_feature_cols(model, df, tgt) if model is not None else [c for c in df.columns if c != tgt]
         X = df[feature_cols]
 
-        # Generate predictions only when model is available
+        # Auto-train a reference model when none is provided so counterfactual simulation always runs
+        if model is None:
+            try:
+                import warnings
+                from sklearn.linear_model import LogisticRegression
+                from app.services.model_adapter import FairLensAdapter
+
+                y_train = pd.to_numeric(df[tgt], errors="coerce").fillna(0).values.astype(int)
+
+                # Build fixed encoding maps so flipped attribute values encode consistently
+                encoding_maps: dict = {}
+                X_enc_train = X.copy()
+                for col in X_enc_train.select_dtypes(include=["object", "category"]).columns:
+                    try:
+                        le_fit = LabelEncoder()
+                        X_enc_train[col] = le_fit.fit_transform(X_enc_train[col].astype(str))
+                        encoding_maps[col] = {str(v): i for i, v in enumerate(le_fit.classes_)}
+                    except Exception:
+                        X_enc_train[col] = 0
+                X_enc_train = X_enc_train.fillna(0)
+
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    auto_clf = LogisticRegression(max_iter=500, random_state=42)
+                    auto_clf.fit(X_enc_train, y_train)
+
+                def _encode_df(X_in: pd.DataFrame) -> pd.DataFrame:
+                    X_e = X_in.copy()
+                    for col, mapping in encoding_maps.items():
+                        if col in X_e.columns:
+                            X_e[col] = X_e[col].astype(str).map(mapping).fillna(-1)
+                    return X_e.fillna(0)
+
+                model = FairLensAdapter.from_callable(
+                    predict_fn=lambda X_in: auto_clf.predict(_encode_df(X_in)),
+                    predict_proba_fn=lambda X_in: auto_clf.predict_proba(_encode_df(X_in)),
+                    model_name="AutoReference_LogisticRegression",
+                )
+                import logging as _log
+                _log.getLogger(__name__).info(
+                    f"[{audit_id}] Auto-trained reference LogisticRegression for counterfactual simulation"
+                )
+            except Exception as _e:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    f"[{audit_id}] Auto-training failed, constitution will use dataset-only mode: {_e}"
+                )
+
+        # Generate predictions
         if model is not None:
             try:
                 y_pred = model.predict(X)

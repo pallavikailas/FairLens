@@ -61,6 +61,7 @@ class CounterfactualConstitutionService:
         constitution_text = await self._gemini_synthesise(
             patterns, cf_pairs, cartography_results, protected_cols, feature_names, audit_id,
             model_available=(model is not None),
+            model=model,
         )
 
         # Step 4: Parse into structured sections
@@ -110,19 +111,27 @@ class CounterfactualConstitutionService:
 
             for col in present_cols:
                 original_val = row[col]
-                other_vals = [v for v in X[col].unique() if v != original_val]
+                other_vals = [v for v in X[col].unique() if v != original_val][:3]
+                if not other_vals:
+                    continue
 
-                for alt_val in other_vals[:3]:  # cap at 3 alternates per attribute
-                    cf_row = row.copy()
-                    cf_row[col] = alt_val
-                    cf_df = pd.DataFrame([cf_row])
+                # Batch original + all counterfactuals so the encoder sees ALL values
+                # for this column at once — prevents fresh single-row LabelEncoders
+                # from mapping every value to 0 (making flips invisible to the model).
+                batch_rows = [row] + [dict(**row, **{col: v}) for v in other_vals]
+                batch_df = pd.DataFrame(batch_rows)
 
-                    try:
-                        cf_pred = model.predict(cf_df)[0]
-                        cf_prob = model.predict_proba(cf_df)[0][1] if hasattr(model, 'predict_proba') else None
-                    except Exception:
-                        continue
+                try:
+                    batch_preds = model.predict(batch_df)
+                    has_proba = hasattr(model, "predict_proba")
+                    batch_probs = model.predict_proba(batch_df)[:, 1] if has_proba else None
+                except Exception:
+                    continue
 
+                orig_prob = float(batch_probs[0]) if batch_probs is not None else None
+                for i, alt_val in enumerate(other_vals):
+                    cf_pred = batch_preds[i + 1]
+                    cf_prob = float(batch_probs[i + 1]) if batch_probs is not None else None
                     pairs.append({
                         "sample_idx": int(idx),
                         "changed_attr": col,
@@ -130,10 +139,10 @@ class CounterfactualConstitutionService:
                         "counterfactual_value": str(alt_val),
                         "original_prediction": int(original_pred),
                         "counterfactual_prediction": int(cf_pred),
-                        "original_prob": float(model.predict_proba(pd.DataFrame([row]))[0][1]) if hasattr(model, 'predict_proba') else None,
-                        "counterfactual_prob": float(cf_prob) if cf_prob is not None else None,
+                        "original_prob": orig_prob,
+                        "counterfactual_prob": cf_prob,
                         "decision_flipped": int(original_pred) != int(cf_pred),
-                        "prob_delta": float(cf_prob - model.predict_proba(pd.DataFrame([row]))[0][1]) if cf_prob is not None and hasattr(model, 'predict_proba') else None,
+                        "prob_delta": float(cf_prob - orig_prob) if cf_prob is not None and orig_prob is not None else None,
                     })
 
         return pairs
@@ -176,17 +185,25 @@ class CounterfactualConstitutionService:
         feature_names: List[str],
         audit_id: str,
         model_available: bool = True,
+        model: Optional[Any] = None,
     ) -> str:
         """Use Gemini to synthesise patterns + counterfactuals into a Constitution document."""
         hotspots_summary = json.dumps(
             cartography_results.get("hotspots", [])[:3], indent=2
         )
-        patterns_summary = json.dumps(patterns, indent=2) if patterns else "No counterfactual patterns available (dataset-only mode)."
+        patterns_summary = json.dumps(patterns, indent=2) if patterns else "No counterfactual flip patterns detected — the model may be insensitive to the protected attributes, or all samples had the same attribute value."
         flip_examples = json.dumps(
             [p for p in cf_pairs if p.get("decision_flipped")][:10], indent=2
-        ) if cf_pairs else "No counterfactual pairs (no model provided)."
+        ) if cf_pairs else "No decision flips detected across counterfactual pairs."
 
-        model_note = "" if model_available else "\nNOTE: No ML model was provided. Analysis is based on dataset statistics and the bias topology map only. Counterfactual simulation is not available.\n"
+        if not model_available:
+            model_note = "\nNOTE: No ML model was provided. Analysis is based on dataset statistics and the bias topology map only. Counterfactual simulation is not available.\n"
+        else:
+            model_name = getattr(model, "_name", None) or getattr(model, "get_model_type", lambda: "")()
+            if "AutoReference" in str(model_name):
+                model_note = "\nNOTE: No user-provided model was uploaded. FairLens auto-trained a Logistic Regression reference model on this dataset to enable counterfactual simulation. The counterfactual results reveal data-level bias — the implicit patterns any model would learn from this training data.\n"
+            else:
+                model_note = ""
 
         prompt = f"""You are an AI fairness auditor generating a "Counterfactual Constitution" —
 a structured policy document that reveals the IMPLICIT RULES an AI model is following
