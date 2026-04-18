@@ -44,6 +44,8 @@ async def generate_constitution(
     cartography_results: str = Form(..., description="JSON string from cartography stage"),
     dataset_source: str = Form(default="upload"),
     dataset_url: str = Form(default=""),
+    model_type: str = Form(default="sklearn"),
+    api_endpoint: str = Form(default=""),
 ):
     audit_id = str(uuid.uuid4())[:8]
     try:
@@ -83,6 +85,24 @@ async def generate_constitution(
                         model = joblib.load(io.BytesIO(model_bytes))
                     except Exception as e:
                         raise HTTPException(400, f"Failed to load model file: {e}")
+
+        elif model_type == "huggingface" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                model = FairLensAdapter.from_huggingface(api_endpoint)
+                # Ensure dataset has a text column for HuggingFace inference
+                if "text" not in df.columns:
+                    str_cols = df.select_dtypes(include=["object"]).columns.tolist()
+                    df["text"] = df[str_cols].fillna("").astype(str).agg(" ".join, axis=1) if str_cols else df.astype(str).agg(" ".join, axis=1)
+            except Exception as e:
+                raise HTTPException(400, f"Failed to load HuggingFace model '{api_endpoint}': {e}")
+
+        elif model_type == "api" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                model = FairLensAdapter.from_api(api_endpoint)
+            except Exception as e:
+                raise HTTPException(400, f"Failed to connect to API model '{api_endpoint}': {e}")
 
         feature_cols = _resolve_feature_cols(model, df, tgt) if model is not None else [c for c in df.columns if c != tgt]
         X = df[feature_cols]

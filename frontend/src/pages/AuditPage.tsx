@@ -89,12 +89,6 @@ export default function AuditPage() {
     : datasetSource === 'huggingface' ? !!hfDataset
     : !!kaggleDataset
 
-  const modelReady = modelType === 'sklearn'
-    ? !!store.modelFile
-    : modelType === 'api' ? !!apiEndpoint
-    : modelType === 'huggingface' ? !!hfModel
-    : !!vertexEndpoint && !!gcpProject
-
   const canRun = datasetReady
 
   const runAudit = async () => {
@@ -155,6 +149,8 @@ export default function AuditPage() {
         carto,
         datasetSource,
         resolvedDatasetUrl,
+        modelType,
+        apiEndpoint || hfModel,
       )
       store.setConstitutionResults(constitution); setProgress(70)
 

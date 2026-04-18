@@ -127,6 +127,33 @@ async def analyze_bias_cartography(
                 except Exception as e:
                     logger.warning(f"[{audit_id}] Could not generate model predictions: {e} — falling back to dataset labels")
 
+        elif model_type == "huggingface" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                adapter = FairLensAdapter.from_huggingface(api_endpoint)
+                df_pred = pd.read_csv(io.StringIO(dataset_csv))
+                if "text" not in df_pred.columns:
+                    # Synthesise a text column by joining all string columns
+                    str_cols = df_pred.select_dtypes(include=["object"]).columns.tolist()
+                    df_pred["text"] = df_pred[str_cols].fillna("").astype(str).agg(" ".join, axis=1) if str_cols else df_pred.astype(str).agg(" ".join, axis=1)
+                preds = adapter.predict(df_pred)
+                model_predictions = [int(p) for p in preds]
+                logger.info(f"[{audit_id}] HuggingFace '{api_endpoint}' generated {len(model_predictions)} predictions")
+            except Exception as e:
+                logger.warning(f"[{audit_id}] HuggingFace model predictions failed: {e} — falling back to dataset labels")
+
+        elif model_type == "api" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                adapter = FairLensAdapter.from_api(api_endpoint)
+                df_pred = pd.read_csv(io.StringIO(dataset_csv))
+                feature_cols_pred = [c for c in df_pred.columns if c != target]
+                preds = adapter.predict(df_pred[feature_cols_pred])
+                model_predictions = [int(p) for p in preds]
+                logger.info(f"[{audit_id}] REST API '{api_endpoint}' generated {len(model_predictions)} predictions")
+            except Exception as e:
+                logger.warning(f"[{audit_id}] REST API model predictions failed: {e} — falling back to dataset labels")
+
         # 4. Call cartography service with model predictions when available
         result = await cartography_service.run_cartography(
             dataset_csv=dataset_csv,
