@@ -132,7 +132,7 @@ async def analyze_bias_cartography(
         elif model_type == "huggingface" and api_endpoint:
             try:
                 from app.services.model_adapter import FairLensAdapter
-                adapter = FairLensAdapter.from_huggingface(api_endpoint, task="text-classification")
+                adapter = FairLensAdapter.from_huggingface(api_endpoint, task="text-classification", hf_token=hf_token)
                 df_pred = pd.read_csv(io.StringIO(dataset_csv))
                 if "text" not in df_pred.columns:
                     str_cols = df_pred.select_dtypes(include=["object"]).columns.tolist()

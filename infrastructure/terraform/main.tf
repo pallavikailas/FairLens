@@ -113,6 +113,7 @@ resource "google_cloud_run_v2_service" "backend" {
 
   template {
     service_account = google_service_account.fairlens_backend.email
+    timeout         = "3600s"
 
     scaling {
       min_instance_count = 0
@@ -123,7 +124,7 @@ resource "google_cloud_run_v2_service" "backend" {
       image = "${var.region}-docker.pkg.dev/${var.project_id}/fairlens/backend:latest"
 
       resources {
-        limits = { cpu = "2", memory = "2Gi" }
+        limits = { cpu = "2", memory = "4Gi" }
       }
 
       env {

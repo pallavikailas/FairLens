@@ -51,9 +51,13 @@ class CounterfactualConstitutionService:
         """
         logger.info(f"[{audit_id}] Generating Counterfactual Constitution (model={'provided' if model else 'none'})")
 
-        # LLMs are slow — limit counterfactual samples to avoid timeouts
-        is_llm = hasattr(model, "get_model_type") and "GenerativeLLM" in (model.get_model_type() or "")
-        cf_n_samples = 20 if is_llm else 200
+        # API-based models are slow — limit CF samples to avoid Cloud Run timeouts.
+        # HF classifiers: ~0.3s/call × 200 samples × 3 attrs × 2 flips = 360s (too slow).
+        # LLMs are even slower. Local sklearn models can handle 200 comfortably.
+        model_type_str = (model.get_model_type() if hasattr(model, "get_model_type") else "") or ""
+        is_generative = "GenerativeLLM" in model_type_str
+        is_api_model = is_generative or any(t in model_type_str for t in ("HuggingFace", "REST:"))
+        cf_n_samples = 20 if is_generative else 50 if is_api_model else 200
 
         # Step 1: Build counterfactual pairs (empty when no model available)
         cf_pairs = self._generate_cf_pairs(model, X, y_pred, protected_cols, n_samples=cf_n_samples)

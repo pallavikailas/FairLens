@@ -237,48 +237,102 @@ class TensorFlowAdapter(BaseModelAdapter):
 
 class HuggingFaceAdapter(BaseModelAdapter):
     """
-    Wraps a HuggingFace pipeline or AutoModel for text classification.
-    Input DataFrame must contain a 'text' column.
+    Wraps a HuggingFace text-classification model via the Inference API (HTTP).
+    No local model download — safe for Cloud Run.
+    For tabular DataFrames without a 'text' column, rows are serialised to
+    "key: value" strings so any text classifier can score them.
     """
 
-    def __init__(self, pipeline_or_model_name: Any, task: str = "text-classification"):
-        from transformers import pipeline as hf_pipeline
-        if isinstance(pipeline_or_model_name, str):
-            self.pipeline = hf_pipeline(task, model=pipeline_or_model_name)
+    _HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/{model}"
+
+    def __init__(self, model_name: Any, task: str = "text-classification", hf_token: str = ""):
+        # Accept a string model name or a pre-built pipeline object (legacy path)
+        if isinstance(model_name, str):
+            self.model_name = model_name
+            self._pipeline = None
         else:
-            self.pipeline = pipeline_or_model_name
-        self._labels = None
+            # Pre-built pipeline passed directly — use locally (backward-compat)
+            self.model_name = getattr(model_name, "model", "unknown")
+            self._pipeline = model_name
+        self.task = task
+        self.hf_token = hf_token
+
+    @staticmethod
+    def _to_text(X: pd.DataFrame) -> list[str]:
+        """Convert a DataFrame row to a text string the classifier can score."""
+        if "text" in X.columns:
+            return X["text"].fillna("").tolist()
+        # Serialise tabular row as "col: value, col: value, ..."
+        return [
+            ", ".join(f"{col}: {val}" for col, val in row.items() if pd.notna(val))
+            for _, row in X.iterrows()
+        ]
+
+    def _query_api(self, texts: list[str]) -> list[dict]:
+        """Call HF Inference API; batch up to 8 texts per request."""
+        import requests
+        url = self._HF_INFERENCE_URL.format(model=self.model_name)
+        headers = {"Content-Type": "application/json"}
+        if self.hf_token:
+            headers["Authorization"] = f"Bearer {self.hf_token}"
+
+        results = []
+        batch_size = 8
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i: i + batch_size]
+            resp = requests.post(url, json={"inputs": batch}, headers=headers, timeout=30)
+            if resp.status_code == 503:
+                raise RuntimeError(
+                    f"HuggingFace model '{self.model_name}' is loading on the Inference API "
+                    "— wait ~20 s and retry."
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            # API returns list-of-lists for batch input
+            if data and isinstance(data[0], list):
+                results.extend(data)
+            else:
+                results.extend([[item] if isinstance(item, dict) else item for item in data])
+        return results
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        proba = self.predict_proba(X)
-        return (proba[:, 1] >= 0.5).astype(int)
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        if "text" not in X.columns:
-            raise ValueError("HuggingFaceAdapter requires a 'text' column in the DataFrame")
-        texts = X["text"].fillna("").tolist()
-        results = self.pipeline(texts, truncation=True, max_length=512)
+        texts = self._to_text(X)
+
+        if self._pipeline is not None:
+            # Legacy local pipeline path
+            raw = self._pipeline(texts, truncation=True, max_length=512)
+        else:
+            raw = self._query_api(texts)
+
         probas = []
-        for r in results:
-            if isinstance(r, list):
-                r = r[0]
-            score = r.get("score", 0.5)
-            label = r.get("label", "").upper()
-            # Treat POSITIVE / LABEL_1 / 1 as positive class
-            if any(pos in label for pos in ["POS", "LABEL_1", "1"]):
-                probas.append([1 - score, score])
+        for item in raw:
+            candidates = item if isinstance(item, list) else [item]
+            # Find the positive-class score
+            pos_score = 0.5
+            for c in candidates:
+                label = c.get("label", "").upper()
+                score = float(c.get("score", 0.5))
+                if any(k in label for k in ("POS", "LABEL_1", "1", "TOXIC", "HATE", "NEG_DENY")):
+                    pos_score = score
+                    break
             else:
-                probas.append([score, 1 - score])
+                # Fall back to highest-scoring label
+                best = max(candidates, key=lambda c: c.get("score", 0))
+                pos_score = float(best.get("score", 0.5))
+            probas.append([1 - pos_score, pos_score])
         return np.array(probas)
 
     def supports_shap(self) -> bool:
-        return False  # Use LIME or KernelExplainer fallback
+        return False
 
     def get_shap_explainer(self, X_background: pd.DataFrame) -> shap.Explainer:
         return shap.Explainer(
             lambda texts: self.predict_proba(pd.DataFrame({"text": texts})),
-            X_background["text"].tolist() if "text" in X_background.columns else [""],
-            output_names=["negative", "positive"]
+            self._to_text(X_background)[:10],
+            output_names=["negative", "positive"],
         )
 
     def get_model_type(self) -> str:
@@ -652,11 +706,12 @@ class FairLensAdapter:
     @staticmethod
     def from_huggingface(
         model_name_or_pipeline: Any,
-        task: str = "text-classification"
+        task: str = "text-classification",
+        hf_token: str = "",
     ) -> HuggingFaceAdapter:
-        """Wrap a HuggingFace model or pipeline."""
-        logger.info(f"Creating HuggingFaceAdapter")
-        return HuggingFaceAdapter(model_name_or_pipeline, task=task)
+        """Wrap a HuggingFace text-classification model via the Inference API."""
+        logger.info(f"Creating HuggingFaceAdapter (Inference API)")
+        return HuggingFaceAdapter(model_name_or_pipeline, task=task, hf_token=hf_token)
 
     @staticmethod
     def from_api(

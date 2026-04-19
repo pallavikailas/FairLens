@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from typing import Optional, List
 import pandas as pd
 import numpy as np
-import pickle, io, uuid, json
+import pickle, io, uuid, json, asyncio
 from sklearn.preprocessing import LabelEncoder
 
 from app.services.constitution import constitution_service
@@ -94,11 +94,8 @@ async def generate_constitution(
         elif model_type == "huggingface" and api_endpoint:
             try:
                 from app.services.model_adapter import FairLensAdapter
-                model = FairLensAdapter.from_huggingface(api_endpoint, task="text-classification")
-                # Ensure dataset has a text column for HuggingFace inference
-                if "text" not in df.columns:
-                    str_cols = df.select_dtypes(include=["object"]).columns.tolist()
-                    df["text"] = df[str_cols].fillna("").astype(str).agg(" ".join, axis=1) if str_cols else df.astype(str).agg(" ".join, axis=1)
+                model = FairLensAdapter.from_huggingface(api_endpoint, task="text-classification", hf_token=hf_token)
+                # HuggingFaceAdapter._to_text auto-serialises tabular rows when no 'text' column present
             except Exception as e:
                 err = str(e)
                 if "No module named 'transformers'" in err:
@@ -209,15 +206,25 @@ async def generate_constitution(
 
         carto = json.loads(cartography_results)
 
-        result = await constitution_service.generate_constitution(
-            model=model,
-            X=X,
-            y_pred=y_pred,
-            protected_cols=protected,
-            feature_names=feature_cols,
-            cartography_results=carto,
-            audit_id=audit_id,
-        )
+        try:
+            result = await asyncio.wait_for(
+                constitution_service.generate_constitution(
+                    model=model,
+                    X=X,
+                    y_pred=y_pred,
+                    protected_cols=protected,
+                    feature_names=feature_cols,
+                    cartography_results=carto,
+                    audit_id=audit_id,
+                ),
+                timeout=540,  # 9 min — well under Cloud Run's 1hr, avoids gateway timeout
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                504,
+                "Constitution timed out (>9 min). The model API is too slow for full counterfactual analysis. "
+                "Try a faster model or reduce dataset size."
+            )
         return JSONResponse(content=result)
     except HTTPException:
         raise
