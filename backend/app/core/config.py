@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     BIGQUERY_TABLE_DECISIONS: str = "decision_logs"
 
     # Red-team agent
-    REDTEAM_MAX_ITERATIONS: int = 50
+    REDTEAM_MAX_ITERATIONS: int = 3
     REDTEAM_BATCH_SIZE: int = 100
 
     # Fairness thresholds (industry standard)

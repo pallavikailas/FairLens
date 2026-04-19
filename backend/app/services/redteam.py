@@ -137,13 +137,18 @@ class FairnessRedTeamAgent:
             "audit_id": audit_id,
         }
 
+        last_log_len = 0
         for step_output in self.graph.stream(state):
             node_name = list(step_output.keys())[0]
             node_state = step_output[node_name]
+            full_log = node_state.get("log", [])
+            # Yield only new log lines to avoid frontend duplication
+            new_lines = full_log[last_log_len:]
+            last_log_len = len(full_log)
             yield {
                 "node": node_name,
                 "iteration": node_state.get("iteration", 0),
-                "log": node_state.get("log", []),
+                "log": new_lines,
                 "status": node_state.get("status", "running"),
             }
 
@@ -191,52 +196,78 @@ class FairnessRedTeamAgent:
     def _evaluate_node(self, state: Dict) -> Dict:
         """
         Evaluator Agent: run probes through the model and measure bias in outputs.
-        Uses Gemini to interpret results semantically.
+
+        IMPORTANT: all probes are predicted in a single batch so that sklearn
+        LabelEncoders see the full range of attribute values — predicting each
+        probe row alone would collapse every value to 0, making all predictions
+        identical and hiding bias.
         """
         model = state["model"]
         probes = state["synthetic_probes"]
         log = state.get("log", [])
 
+        if not probes:
+            log.append("[Evaluator Agent] No probes to evaluate")
+            return {**state, "evaluation_results": [], "log": log}
+
         log.append(f"[Evaluator Agent] Running {len(probes)} probes through model...")
 
+        # ── Batch predict all probes at once ────────────────────────────────
+        batch_df = pd.DataFrame([p["features"] for p in probes])
+        try:
+            batch_preds = self._safe_predict(model, batch_df)
+            has_proba = hasattr(model, "predict_proba")
+            if has_proba:
+                try:
+                    batch_probs = model.predict_proba(batch_df)[:, 1]
+                except Exception:
+                    # If predict_proba fails after safe_predict succeeded, use safe encode path
+                    batch_probs = None
+                    has_proba = False
+            else:
+                batch_probs = None
+        except Exception as e:
+            log.append(f"[Evaluator Agent] Batch prediction failed: {e}")
+            return {**state, "evaluation_results": [], "log": log}
+
         results = []
-        for probe in probes:
+        for i, probe in enumerate(probes):
             try:
-                features_df = pd.DataFrame([probe["features"]])
-                pred = self._safe_predict(model, features_df)[0]
-                prob = model.predict_proba(features_df)[0][1] if hasattr(model, 'predict_proba') else None
+                prob = float(batch_probs[i]) if batch_probs is not None else None
                 results.append({
                     **probe,
-                    "prediction": int(pred),
-                    "probability": float(prob) if prob is not None else None,
+                    "prediction": int(batch_preds[i]),
+                    "probability": prob,
                 })
-            except Exception as e:
+            except Exception:
                 continue
 
-        # Group by (base case, target attribute) and compute disparity
+        # ── Group by attribute and compute disparity ────────────────────────
         evaluation = []
-        attr_groups = {}
+        attr_groups: Dict[str, List] = {}
         for r in results:
-            key = r["base_attr"]
-            if key not in attr_groups:
-                attr_groups[key] = []
-            attr_groups[key].append(r)
+            attr_groups.setdefault(r["base_attr"], []).append(r)
 
         for attr, group in attr_groups.items():
             probs = [r["probability"] for r in group if r["probability"] is not None]
             if not probs:
-                continue
-            disparity = max(probs) - min(probs)
+                # Fall back to prediction disparity when no probabilities available
+                preds = [r["prediction"] for r in group]
+                disparity = float(max(preds) - min(preds))
+            else:
+                disparity = max(probs) - min(probs)
             evaluation.append({
                 "attribute": attr,
                 "disparity": round(disparity, 4),
-                "max_prob": round(max(probs), 4),
-                "min_prob": round(min(probs), 4),
-                "bias_confirmed": disparity > 0.1,
+                "max_prob": round(max(probs), 4) if probs else None,
+                "min_prob": round(min(probs), 4) if probs else None,
+                "bias_confirmed": disparity > 0.05,  # lower threshold — 5pp difference is meaningful
                 "sample_count": len(group),
             })
 
-        log.append(f"[Evaluator Agent] Bias confirmed in {sum(1 for e in evaluation if e['bias_confirmed'])} attributes")
+        n_confirmed = sum(1 for e in evaluation if e["bias_confirmed"])
+        log.append(f"[Evaluator Agent] Bias confirmed in {n_confirmed}/{len(evaluation)} attributes "
+                   f"(disparities: {', '.join(f'{e[\"attribute\"]}={e[\"disparity\"]:.3f}' for e in evaluation)})")
         return {**state, "evaluation_results": evaluation, "log": log}
 
     def _decide_patch_node(self, state: Dict) -> Dict:
