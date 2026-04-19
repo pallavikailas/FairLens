@@ -29,6 +29,8 @@ export async function runConstitution(
   datasetUrl: string = '',
   modelType: string = 'sklearn',
   apiEndpoint: string = '',
+  llmApiKey: string = '',
+  hfToken: string = '',
 ): Promise<any> {
   const fd = new FormData()
   if (modelFile) fd.append('model_file', modelFile)
@@ -40,6 +42,8 @@ export async function runConstitution(
   if (datasetUrl) fd.append('dataset_url', datasetUrl)
   fd.append('model_type', modelType)
   if (apiEndpoint) fd.append('api_endpoint', apiEndpoint)
+  if (llmApiKey) fd.append('llm_api_key', llmApiKey)
+  if (hfToken) fd.append('hf_token', hfToken)
   const res = await fetch(`${BASE}/api/v1/constitution/generate`, { method: 'POST', body: fd })
   if (!res.ok) throw new Error(await res.text())
   return res.json()

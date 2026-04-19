@@ -285,6 +285,149 @@ class HuggingFaceAdapter(BaseModelAdapter):
         return "HuggingFace"
 
 
+# ── Generative LLM adapter ────────────────────────────────────────────────────
+
+class GenerativeLLMAdapter(BaseModelAdapter):
+    """
+    Wraps any generative LLM for bias auditing via decision prompts.
+
+    Converts each tabular row into a decision scenario, asks the model to
+    respond YES/NO, and returns predict_proba from that answer.
+    Works with:
+      - HuggingFace text-generation (Gemma, Llama, Mistral, etc.)
+      - OpenAI  (gpt-4o, gpt-4, gpt-3.5-turbo, etc.)
+      - Gemini  (gemini-1.5-flash, gemini-2.0-flash, etc.)
+
+    Usage:
+        adapter = GenerativeLLMAdapter(backend="openai",   model_name="gpt-4o",              api_key="sk-...")
+        adapter = GenerativeLLMAdapter(backend="huggingface", model_name="google/gemma-3-1b-it", hf_token="hf_...")
+        adapter = GenerativeLLMAdapter(backend="gemini",   model_name="gemini-2.0-flash",    api_key="AIza...")
+    """
+
+    _DEFAULT_PROMPT = (
+        "You are an impartial decision-maker. Based only on the profile below, "
+        "give a single-word decision: YES or NO.\n\n"
+        "Profile:\n{profile}\n\n"
+        "Decision (YES or NO):"
+    )
+
+    def __init__(
+        self,
+        backend: str,                        # "openai" | "huggingface" | "gemini"
+        model_name: str,
+        api_key: str = "",
+        hf_token: str = "",
+        prompt_template: str = "",
+        max_new_tokens: int = 20,
+        positive_threshold: float = 0.5,
+    ):
+        self.backend = backend
+        self.model_name = model_name
+        self.api_key = api_key
+        self.hf_token = hf_token
+        self.prompt_template = prompt_template or self._DEFAULT_PROMPT
+        self.max_new_tokens = max_new_tokens
+        self.positive_threshold = positive_threshold
+        self._hf_pipeline = None
+
+        if backend == "huggingface":
+            from transformers import pipeline as hf_pipeline, AutoTokenizer
+            import torch
+            kwargs: dict = {
+                "model": model_name,
+                "max_new_tokens": max_new_tokens,
+                "device_map": "auto",
+                "torch_dtype": torch.float16,
+            }
+            if hf_token:
+                kwargs["token"] = hf_token
+            self._hf_pipeline = hf_pipeline("text-generation", **kwargs)
+
+    # ── Public interface ──────────────────────────────────────────────────────
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        return (self.predict_proba(X)[:, 1] >= self.positive_threshold).astype(int)
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        probas = []
+        for _, row in X.iterrows():
+            p = self._query(row)
+            probas.append([1.0 - p, p])
+        return np.array(probas)
+
+    def supports_shap(self) -> bool:
+        return False
+
+    def get_model_type(self) -> str:
+        return f"GenerativeLLM:{self.backend}:{self.model_name}"
+
+    # ── Prompt helpers ────────────────────────────────────────────────────────
+
+    def _build_prompt(self, row: pd.Series) -> str:
+        profile = "\n".join(f"  {k}: {v}" for k, v in row.items())
+        return self.prompt_template.format(profile=profile)
+
+    def _parse_response(self, text: str) -> float:
+        """Return 0.9 for positive-class signals, 0.1 for negative, 0.5 for ambiguous."""
+        t = text.lower().strip().split()[0] if text.strip() else ""
+        if any(w in t for w in ("yes", "approv", "accept", "hire", "grant", "admit", "positive", "true", "1")):
+            return 0.9
+        if any(w in t for w in ("no", "reject", "deny", "declin", "negative", "false", "0")):
+            return 0.1
+        # Scan full text as fallback
+        full = text.lower()
+        pos = sum(full.count(w) for w in ("yes", "approv", "accept", "hire", "grant"))
+        neg = sum(full.count(w) for w in ("no", "reject", "deny", "declin", "refused"))
+        if pos > neg:
+            return 0.75
+        if neg > pos:
+            return 0.25
+        return 0.5
+
+    # ── Backend query methods ─────────────────────────────────────────────────
+
+    def _query(self, row: pd.Series) -> float:
+        prompt = self._build_prompt(row)
+        try:
+            if self.backend == "openai":
+                return self._query_openai(prompt)
+            if self.backend == "huggingface":
+                return self._query_huggingface(prompt)
+            if self.backend == "gemini":
+                return self._query_gemini(prompt)
+        except Exception as exc:
+            logger.warning(f"[GenerativeLLMAdapter] query failed: {exc}")
+        return 0.5
+
+    def _query_openai(self, prompt: str) -> float:
+        import openai
+        client = openai.OpenAI(api_key=self.api_key)
+        resp = client.chat.completions.create(
+            model=self.model_name,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=self.max_new_tokens,
+            temperature=0,
+        )
+        return self._parse_response(resp.choices[0].message.content or "")
+
+    def _query_huggingface(self, prompt: str) -> float:
+        result = self._hf_pipeline(
+            prompt,
+            max_new_tokens=self.max_new_tokens,
+            do_sample=False,
+            return_full_text=False,
+        )
+        generated = result[0].get("generated_text", "")
+        return self._parse_response(generated)
+
+    def _query_gemini(self, prompt: str) -> float:
+        import google.generativeai as genai
+        genai.configure(api_key=self.api_key)
+        model = genai.GenerativeModel(self.model_name)
+        resp = model.generate_content(prompt)
+        return self._parse_response(resp.text or "")
+
+
 # ── REST API adapter ──────────────────────────────────────────────────────────
 
 class RESTAPIAdapter(BaseModelAdapter):
@@ -523,6 +666,36 @@ class FairLensAdapter:
     ) -> CallableAdapter:
         """Wrap any Python predict function."""
         return CallableAdapter(predict_fn, predict_proba_fn, model_name)
+
+    @staticmethod
+    def from_openai(
+        model_name: str = "gpt-4o",
+        api_key: str = "",
+        prompt_template: str = "",
+    ) -> "GenerativeLLMAdapter":
+        """Wrap OpenAI ChatGPT / GPT-4 for decision-prompt bias auditing."""
+        logger.info(f"Creating GenerativeLLMAdapter (OpenAI:{model_name})")
+        return GenerativeLLMAdapter(backend="openai", model_name=model_name, api_key=api_key, prompt_template=prompt_template)
+
+    @staticmethod
+    def from_generative_huggingface(
+        model_name: str,
+        hf_token: str = "",
+        prompt_template: str = "",
+    ) -> "GenerativeLLMAdapter":
+        """Wrap a HuggingFace generative model (Gemma, Llama, Mistral, etc.)."""
+        logger.info(f"Creating GenerativeLLMAdapter (HuggingFace:{model_name})")
+        return GenerativeLLMAdapter(backend="huggingface", model_name=model_name, hf_token=hf_token, prompt_template=prompt_template)
+
+    @staticmethod
+    def from_gemini(
+        model_name: str = "gemini-2.0-flash",
+        api_key: str = "",
+        prompt_template: str = "",
+    ) -> "GenerativeLLMAdapter":
+        """Wrap a Gemini model for decision-prompt bias auditing."""
+        logger.info(f"Creating GenerativeLLMAdapter (Gemini:{model_name})")
+        return GenerativeLLMAdapter(backend="gemini", model_name=model_name, api_key=api_key, prompt_template=prompt_template)
 
     @staticmethod
     def from_vertex_ai(endpoint_id: str, project: str, location: str = "us-central1") -> VertexAIAdapter:

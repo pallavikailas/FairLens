@@ -46,6 +46,8 @@ async def generate_constitution(
     dataset_url: str = Form(default=""),
     model_type: str = Form(default="sklearn"),
     api_endpoint: str = Form(default=""),
+    llm_api_key: str = Form(default=""),
+    hf_token: str = Form(default=""),
 ):
     audit_id = str(uuid.uuid4())[:8]
     try:
@@ -92,12 +94,17 @@ async def generate_constitution(
         elif model_type == "huggingface" and api_endpoint:
             try:
                 from app.services.model_adapter import FairLensAdapter
-                model = FairLensAdapter.from_huggingface(api_endpoint)
+                model = FairLensAdapter.from_huggingface(api_endpoint, task="text-classification")
                 # Ensure dataset has a text column for HuggingFace inference
                 if "text" not in df.columns:
                     str_cols = df.select_dtypes(include=["object"]).columns.tolist()
                     df["text"] = df[str_cols].fillna("").astype(str).agg(" ".join, axis=1) if str_cols else df.astype(str).agg(" ".join, axis=1)
             except Exception as e:
+                err = str(e)
+                if "No module named 'transformers'" in err:
+                    raise HTTPException(500, "transformers library not installed on the server. Contact the administrator.")
+                if any(kw in err.lower() for kw in ["text-generation", "causal", "generative", "seq2seq", "not supported for the pipeline"]):
+                    raise HTTPException(400, f"'{api_endpoint}' is a generative/text-generation model. FairLens requires a text-classification model. Try one of: unitary/toxic-bert, cardiffnlp/twitter-roberta-base-sentiment, valurank/distilroberta-base-offensive-language-identification")
                 raise HTTPException(400, f"Failed to load HuggingFace model '{api_endpoint}': {e}")
 
         elif model_type == "api" and api_endpoint:
@@ -106,6 +113,27 @@ async def generate_constitution(
                 model = FairLensAdapter.from_api(api_endpoint)
             except Exception as e:
                 raise HTTPException(400, f"Failed to connect to API model '{api_endpoint}': {e}")
+
+        elif model_type == "llm_hf" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                model = FairLensAdapter.from_generative_huggingface(api_endpoint, hf_token=hf_token)
+            except Exception as e:
+                raise HTTPException(400, f"Failed to load HuggingFace generative model '{api_endpoint}': {e}")
+
+        elif model_type == "openai" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                model = FairLensAdapter.from_openai(model_name=api_endpoint, api_key=llm_api_key)
+            except Exception as e:
+                raise HTTPException(400, f"Failed to initialise OpenAI model '{api_endpoint}': {e}")
+
+        elif model_type == "gemini_llm" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                model = FairLensAdapter.from_gemini(model_name=api_endpoint, api_key=llm_api_key)
+            except Exception as e:
+                raise HTTPException(400, f"Failed to initialise Gemini model '{api_endpoint}': {e}")
 
         feature_cols = _resolve_feature_cols(model, df, tgt) if model is not None else [c for c in df.columns if c != tgt]
         X = df[feature_cols]

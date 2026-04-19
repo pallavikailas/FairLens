@@ -62,6 +62,8 @@ async def analyze_bias_cartography(
     gcp_project: str = Form(default=""),
     dataset_source: str = Form(default="upload"),
     dataset_url: str = Form(default=""),
+    llm_api_key: str = Form(default=""),
+    hf_token: str = Form(default=""),
 ):
     audit_id = str(uuid.uuid4())[:8]
     try:
@@ -130,17 +132,52 @@ async def analyze_bias_cartography(
         elif model_type == "huggingface" and api_endpoint:
             try:
                 from app.services.model_adapter import FairLensAdapter
-                adapter = FairLensAdapter.from_huggingface(api_endpoint)
+                adapter = FairLensAdapter.from_huggingface(api_endpoint, task="text-classification")
                 df_pred = pd.read_csv(io.StringIO(dataset_csv))
                 if "text" not in df_pred.columns:
-                    # Synthesise a text column by joining all string columns
                     str_cols = df_pred.select_dtypes(include=["object"]).columns.tolist()
                     df_pred["text"] = df_pred[str_cols].fillna("").astype(str).agg(" ".join, axis=1) if str_cols else df_pred.astype(str).agg(" ".join, axis=1)
                 preds = adapter.predict(df_pred)
                 model_predictions = [int(p) for p in preds]
-                logger.info(f"[{audit_id}] HuggingFace '{api_endpoint}' generated {len(model_predictions)} predictions")
+                logger.info(f"[{audit_id}] HuggingFace classifier '{api_endpoint}' generated {len(model_predictions)} predictions")
             except Exception as e:
                 logger.warning(f"[{audit_id}] HuggingFace model predictions failed: {e} — falling back to dataset labels")
+
+        elif model_type == "llm_hf" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                adapter = FairLensAdapter.from_generative_huggingface(api_endpoint, hf_token=hf_token)
+                df_pred = pd.read_csv(io.StringIO(dataset_csv))
+                feature_cols_pred = [c for c in df_pred.columns if c != target]
+                preds = adapter.predict(df_pred[feature_cols_pred])
+                model_predictions = [int(p) for p in preds]
+                logger.info(f"[{audit_id}] HuggingFace generative '{api_endpoint}' generated {len(model_predictions)} predictions")
+            except Exception as e:
+                logger.warning(f"[{audit_id}] HuggingFace generative model failed: {e} — falling back to dataset labels")
+
+        elif model_type == "openai" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                adapter = FairLensAdapter.from_openai(model_name=api_endpoint, api_key=llm_api_key)
+                df_pred = pd.read_csv(io.StringIO(dataset_csv))
+                feature_cols_pred = [c for c in df_pred.columns if c != target]
+                preds = adapter.predict(df_pred[feature_cols_pred])
+                model_predictions = [int(p) for p in preds]
+                logger.info(f"[{audit_id}] OpenAI '{api_endpoint}' generated {len(model_predictions)} predictions")
+            except Exception as e:
+                logger.warning(f"[{audit_id}] OpenAI model failed: {e} — falling back to dataset labels")
+
+        elif model_type == "gemini_llm" and api_endpoint:
+            try:
+                from app.services.model_adapter import FairLensAdapter
+                adapter = FairLensAdapter.from_gemini(model_name=api_endpoint, api_key=llm_api_key)
+                df_pred = pd.read_csv(io.StringIO(dataset_csv))
+                feature_cols_pred = [c for c in df_pred.columns if c != target]
+                preds = adapter.predict(df_pred[feature_cols_pred])
+                model_predictions = [int(p) for p in preds]
+                logger.info(f"[{audit_id}] Gemini '{api_endpoint}' generated {len(model_predictions)} predictions")
+            except Exception as e:
+                logger.warning(f"[{audit_id}] Gemini model failed: {e} — falling back to dataset labels")
 
         elif model_type == "api" and api_endpoint:
             try:

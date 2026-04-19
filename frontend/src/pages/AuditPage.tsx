@@ -7,10 +7,13 @@ import { runCartography, runConstitution, runProxyHunter } from '../utils/api'
 
 // ── Model type config ──────────────────────────────────────────────────────
 const MODEL_TYPES = [
-  { id: 'sklearn',    icon: '🧠', label: 'scikit-learn / XGBoost',     desc: 'Upload a .pkl model file' },
-  { id: 'api',        icon: '🌐', label: 'REST API Endpoint',           desc: 'Any model behind an HTTP URL' },
-  { id: 'huggingface',icon: '🤗', label: 'HuggingFace',                desc: 'Model name from HuggingFace Hub' },
-  { id: 'vertex_ai',  icon: '☁',  label: 'Vertex AI Endpoint',          desc: 'Google Cloud deployed model' },
+  { id: 'sklearn',     icon: '🧠', label: 'scikit-learn / XGBoost',      desc: 'Upload a .pkl model file' },
+  { id: 'api',         icon: '🌐', label: 'REST API Endpoint',            desc: 'Any model behind an HTTP URL' },
+  { id: 'huggingface', icon: '🤗', label: 'HuggingFace Classifier',       desc: 'Text-classification model from HF Hub' },
+  { id: 'llm_hf',      icon: '🦙', label: 'HuggingFace Generative LLM',  desc: 'Gemma, Llama, Mistral, etc.' },
+  { id: 'openai',      icon: '🔮', label: 'OpenAI (ChatGPT / GPT-4)',     desc: 'gpt-4o, gpt-4, gpt-3.5-turbo' },
+  { id: 'gemini_llm',  icon: '✦',  label: 'Gemini LLM',                  desc: 'gemini-2.0-flash, gemini-1.5-pro' },
+  { id: 'vertex_ai',   icon: '☁',  label: 'Vertex AI Endpoint',           desc: 'Google Cloud deployed model' },
 ] as const
 
 type ModelType = typeof MODEL_TYPES[number]['id']
@@ -72,6 +75,12 @@ export default function AuditPage() {
   const [datasetSource, setDatasetSource] = useState<DatasetSource>('upload')
   const [apiEndpoint, setApiEndpoint] = useState('')
   const [hfModel, setHfModel] = useState('')
+  const [llmHfModel, setLlmHfModel] = useState('')
+  const [hfToken, setHfToken] = useState('')
+  const [openaiModel, setOpenaiModel] = useState('gpt-4o')
+  const [openaiKey, setOpenaiKey] = useState('')
+  const [geminiModel, setGeminiModel] = useState('gemini-2.0-flash')
+  const [geminiKey, setGeminiKey] = useState('')
   const [vertexEndpoint, setVertexEndpoint] = useState('')
   const [gcpProject, setGcpProject] = useState('')
   const [datasetUrl, setDatasetUrl] = useState('')
@@ -107,14 +116,28 @@ export default function AuditPage() {
       store.setDatasetSource(datasetSource)
       store.setDatasetUrl(resolvedDatasetUrl)
 
+      // Resolve model identifier and credentials for the selected model type
+      const modelEndpoint =
+        modelType === 'huggingface' ? hfModel :
+        modelType === 'llm_hf'     ? llmHfModel :
+        modelType === 'openai'     ? openaiModel :
+        modelType === 'gemini_llm' ? geminiModel :
+        apiEndpoint
+
+      const resolvedLlmKey =
+        modelType === 'openai'     ? openaiKey :
+        modelType === 'gemini_llm' ? geminiKey : ''
+
       // Build extra params for model type and dataset source
       const extraParams = {
         model_type: modelType,
-        api_endpoint: apiEndpoint || hfModel || '',
+        api_endpoint: modelEndpoint,
         vertex_endpoint_id: vertexEndpoint,
         gcp_project: gcpProject,
         dataset_source: datasetSource,
         dataset_url: resolvedDatasetUrl,
+        llm_api_key: resolvedLlmKey,
+        hf_token: hfToken,
       }
 
       const carto = await runCartography(
@@ -150,7 +173,9 @@ export default function AuditPage() {
         datasetSource,
         resolvedDatasetUrl,
         modelType,
-        apiEndpoint || hfModel,
+        modelEndpoint,
+        resolvedLlmKey,
+        hfToken,
       )
       store.setConstitutionResults(constitution); setProgress(70)
 
@@ -265,6 +290,40 @@ export default function AuditPage() {
                   placeholder="e.g. distilbert-base-uncased-finetuned-sst-2-english"
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
                 <p className="text-white/25 text-xs mt-2">Your dataset must have a <span className="text-lens-light font-mono">text</span> column for HuggingFace models.</p>
+              </div>
+            )}
+            {modelType === 'llm_hf' && (
+              <div className="space-y-3">
+                <input value={llmHfModel} onChange={e => setLlmHfModel(e.target.value)}
+                  placeholder="e.g. google/gemma-3-1b-it or meta-llama/Llama-3.2-1B-Instruct"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+                <input value={hfToken} onChange={e => setHfToken(e.target.value)}
+                  placeholder="HuggingFace token (hf_...) — required for gated models"
+                  type="password"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+                <p className="text-white/25 text-xs">FairLens uses decision prompts to probe any generative model for bias — no text column needed.</p>
+              </div>
+            )}
+            {modelType === 'openai' && (
+              <div className="space-y-3">
+                <input value={openaiModel} onChange={e => setOpenaiModel(e.target.value)}
+                  placeholder="e.g. gpt-4o, gpt-4, gpt-3.5-turbo"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+                <input value={openaiKey} onChange={e => setOpenaiKey(e.target.value)}
+                  placeholder="OpenAI API key (sk-...)"
+                  type="password"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+              </div>
+            )}
+            {modelType === 'gemini_llm' && (
+              <div className="space-y-3">
+                <input value={geminiModel} onChange={e => setGeminiModel(e.target.value)}
+                  placeholder="e.g. gemini-2.0-flash, gemini-1.5-pro"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
+                <input value={geminiKey} onChange={e => setGeminiKey(e.target.value)}
+                  placeholder="Gemini API key (AIza...)"
+                  type="password"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
               </div>
             )}
             {modelType === 'vertex_ai' && (
