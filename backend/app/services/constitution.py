@@ -51,8 +51,12 @@ class CounterfactualConstitutionService:
         """
         logger.info(f"[{audit_id}] Generating Counterfactual Constitution (model={'provided' if model else 'none'})")
 
+        # LLMs are slow — limit counterfactual samples to avoid timeouts
+        is_llm = hasattr(model, "get_model_type") and "GenerativeLLM" in (model.get_model_type() or "")
+        cf_n_samples = 20 if is_llm else 200
+
         # Step 1: Build counterfactual pairs (empty when no model available)
-        cf_pairs = self._generate_cf_pairs(model, X, y_pred, protected_cols, n_samples=200)
+        cf_pairs = self._generate_cf_pairs(model, X, y_pred, protected_cols, n_samples=cf_n_samples)
 
         # Step 2: Extract decision patterns
         patterns = self._extract_patterns(cf_pairs, protected_cols)

@@ -311,6 +311,9 @@ class GenerativeLLMAdapter(BaseModelAdapter):
         "Decision (YES or NO):"
     )
 
+    # HuggingFace Inference API endpoint — no local model download required
+    _HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/{model}"
+
     def __init__(
         self,
         backend: str,                        # "openai" | "huggingface" | "gemini"
@@ -328,20 +331,7 @@ class GenerativeLLMAdapter(BaseModelAdapter):
         self.prompt_template = prompt_template or self._DEFAULT_PROMPT
         self.max_new_tokens = max_new_tokens
         self.positive_threshold = positive_threshold
-        self._hf_pipeline = None
-
-        if backend == "huggingface":
-            from transformers import pipeline as hf_pipeline, AutoTokenizer
-            import torch
-            kwargs: dict = {
-                "model": model_name,
-                "max_new_tokens": max_new_tokens,
-                "device_map": "auto",
-                "torch_dtype": torch.float16,
-            }
-            if hf_token:
-                kwargs["token"] = hf_token
-            self._hf_pipeline = hf_pipeline("text-generation", **kwargs)
+        # HuggingFace uses the Inference API — no local pipeline/weights download
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -411,13 +401,34 @@ class GenerativeLLMAdapter(BaseModelAdapter):
         return self._parse_response(resp.choices[0].message.content or "")
 
     def _query_huggingface(self, prompt: str) -> float:
-        result = self._hf_pipeline(
-            prompt,
-            max_new_tokens=self.max_new_tokens,
-            do_sample=False,
-            return_full_text=False,
-        )
-        generated = result[0].get("generated_text", "")
+        """Call HuggingFace Inference API — no local model download."""
+        import requests
+        url = self._HF_INFERENCE_URL.format(model=self.model_name)
+        headers = {"Content-Type": "application/json"}
+        if self.hf_token:
+            headers["Authorization"] = f"Bearer {self.hf_token}"
+        payload = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": self.max_new_tokens,
+                "return_full_text": False,
+                "temperature": 0.01,
+            },
+        }
+        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        if resp.status_code == 503:
+            raise RuntimeError(
+                f"HuggingFace model '{self.model_name}' is loading on the Inference API — "
+                "wait ~20s and retry, or use a smaller/always-on model."
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list) and data:
+            generated = data[0].get("generated_text", "")
+        elif isinstance(data, dict):
+            generated = data.get("generated_text", "")
+        else:
+            generated = str(data)
         return self._parse_response(generated)
 
     def _query_gemini(self, prompt: str) -> float:

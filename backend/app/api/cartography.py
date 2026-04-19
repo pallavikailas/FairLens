@@ -143,41 +143,36 @@ async def analyze_bias_cartography(
             except Exception as e:
                 logger.warning(f"[{audit_id}] HuggingFace model predictions failed: {e} — falling back to dataset labels")
 
-        elif model_type == "llm_hf" and api_endpoint:
+        elif model_type in ("llm_hf", "openai", "gemini_llm") and api_endpoint:
             try:
                 from app.services.model_adapter import FairLensAdapter
-                adapter = FairLensAdapter.from_generative_huggingface(api_endpoint, hf_token=hf_token)
-                df_pred = pd.read_csv(io.StringIO(dataset_csv))
-                feature_cols_pred = [c for c in df_pred.columns if c != target]
-                preds = adapter.predict(df_pred[feature_cols_pred])
-                model_predictions = [int(p) for p in preds]
-                logger.info(f"[{audit_id}] HuggingFace generative '{api_endpoint}' generated {len(model_predictions)} predictions")
-            except Exception as e:
-                logger.warning(f"[{audit_id}] HuggingFace generative model failed: {e} — falling back to dataset labels")
+                if model_type == "llm_hf":
+                    adapter = FairLensAdapter.from_generative_huggingface(api_endpoint, hf_token=hf_token)
+                elif model_type == "openai":
+                    adapter = FairLensAdapter.from_openai(model_name=api_endpoint, api_key=llm_api_key)
+                else:
+                    adapter = FairLensAdapter.from_gemini(model_name=api_endpoint, api_key=llm_api_key)
 
-        elif model_type == "openai" and api_endpoint:
-            try:
-                from app.services.model_adapter import FairLensAdapter
-                adapter = FairLensAdapter.from_openai(model_name=api_endpoint, api_key=llm_api_key)
                 df_pred = pd.read_csv(io.StringIO(dataset_csv))
                 feature_cols_pred = [c for c in df_pred.columns if c != target]
-                preds = adapter.predict(df_pred[feature_cols_pred])
-                model_predictions = [int(p) for p in preds]
-                logger.info(f"[{audit_id}] OpenAI '{api_endpoint}' generated {len(model_predictions)} predictions")
-            except Exception as e:
-                logger.warning(f"[{audit_id}] OpenAI model failed: {e} — falling back to dataset labels")
+                # Sample at most 100 rows — LLM calls are slow; bias patterns
+                # are detectable on a representative sample.
+                sample_df = df_pred[feature_cols_pred].sample(
+                    min(100, len(df_pred)), random_state=42
+                ).reset_index(drop=True)
+                preds_sample = adapter.predict(sample_df)
 
-        elif model_type == "gemini_llm" and api_endpoint:
-            try:
-                from app.services.model_adapter import FairLensAdapter
-                adapter = FairLensAdapter.from_gemini(model_name=api_endpoint, api_key=llm_api_key)
-                df_pred = pd.read_csv(io.StringIO(dataset_csv))
-                feature_cols_pred = [c for c in df_pred.columns if c != target]
-                preds = adapter.predict(df_pred[feature_cols_pred])
-                model_predictions = [int(p) for p in preds]
-                logger.info(f"[{audit_id}] Gemini '{api_endpoint}' generated {len(model_predictions)} predictions")
+                # Align sampled predictions back to full dataframe index
+                full_preds = np.full(len(df_pred), 0.5)
+                sample_idx = df_pred[feature_cols_pred].sample(
+                    min(100, len(df_pred)), random_state=42
+                ).index.tolist()
+                for i, idx in enumerate(sample_idx):
+                    full_preds[idx] = preds_sample[i]
+                model_predictions = [int(round(p)) for p in full_preds]
+                logger.info(f"[{audit_id}] {model_type} '{api_endpoint}' generated predictions on {len(preds_sample)} sampled rows")
             except Exception as e:
-                logger.warning(f"[{audit_id}] Gemini model failed: {e} — falling back to dataset labels")
+                logger.warning(f"[{audit_id}] {model_type} model predictions failed: {e} — falling back to dataset labels")
 
         elif model_type == "api" and api_endpoint:
             try:
