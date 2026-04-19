@@ -245,9 +245,10 @@ class FairnessRedTeamAgent:
         confirmed = [e for e in evaluation if e.get("bias_confirmed")]
 
         # Build mitigation plan
+        model = state.get("model")
         mitigation_plan = []
         for e in confirmed:
-            strategy = self._select_mitigation_strategy(e)
+            strategy = self._select_mitigation_strategy(e, model=model)
             mitigation_plan.append({
                 "attribute": e["attribute"],
                 "strategy": strategy["name"],
@@ -280,20 +281,33 @@ class FairnessRedTeamAgent:
             log.append(f"[Patcher Agent] Applying '{strategy}' for attribute '{attr}'")
 
             try:
-                if strategy == "sample_reweighing":
-                    weights = self._compute_reweighing_weights(X_train, y_train, attr)
-                    model.fit(X_train, y_train, sample_weight=weights)
+                if strategy == "prompt_fairness_constraint":
+                    # For generative LLMs: inject fairness constraints into the prompt template
+                    fairness_note = (
+                        f" IMPORTANT: Your decision must be independent of {attr}. "
+                        "Apply equal standards regardless of demographic group."
+                    )
+                    if hasattr(model, "_prompt_template"):
+                        model._prompt_template = model._prompt_template + fairness_note
+                    log.append(f"[Patcher Agent] Injected fairness constraint for '{attr}' into prompt template")
                     patch_results["applied"].append({"strategy": strategy, "attribute": attr})
 
+                elif strategy == "sample_reweighing":
+                    if self._model_is_trainable(model):
+                        weights = self._compute_reweighing_weights(X_train, y_train, attr)
+                        raw = getattr(model, "_model", model)
+                        raw.fit(X_train, y_train, sample_weight=weights)
+                        patch_results["applied"].append({"strategy": strategy, "attribute": attr})
+                    else:
+                        # Fall back to threshold adjustment for non-trainable models
+                        state["group_thresholds"] = self._compute_group_thresholds(model, X_train, y_train, attr)
+                        patch_results["applied"].append({"strategy": "threshold_adjustment (fallback)", "attribute": attr})
+
                 elif strategy == "threshold_adjustment":
-                    # Store per-group thresholds (applied at inference time)
-                    state["group_thresholds"] = self._compute_group_thresholds(
-                        model, X_train, y_train, attr
-                    )
+                    state["group_thresholds"] = self._compute_group_thresholds(model, X_train, y_train, attr)
                     patch_results["applied"].append({"strategy": strategy, "attribute": attr})
 
                 elif strategy == "feature_ablation":
-                    # Remove the proxy feature
                     if attr in X_train.columns:
                         state["X_train"] = X_train.drop(columns=[attr])
                         log.append(f"[Patcher Agent] Removed proxy feature '{attr}' from training set")
@@ -398,8 +412,28 @@ class FairnessRedTeamAgent:
 
     # ── Mitigation utilities ─────────────────────────────────────────────────
 
-    def _select_mitigation_strategy(self, evaluation: Dict) -> Dict:
+    @staticmethod
+    def _model_is_trainable(model) -> bool:
+        """Returns True only if model supports .fit() — i.e. sklearn/XGBoost/LightGBM wrappers."""
+        raw = getattr(model, "_model", model)
+        return hasattr(raw, "fit") and callable(getattr(raw, "fit", None))
+
+    @staticmethod
+    def _model_is_generative(model) -> bool:
+        model_type = ""
+        if hasattr(model, "get_model_type"):
+            model_type = model.get_model_type() or ""
+        return "GenerativeLLM" in model_type or "OpenAI" in model_type or "Gemini" in model_type
+
+    def _select_mitigation_strategy(self, evaluation: Dict, model=None) -> Dict:
         disparity = evaluation.get("disparity", 0)
+        is_generative = model is not None and self._model_is_generative(model)
+        is_trainable = model is None or self._model_is_trainable(model)
+
+        if is_generative:
+            return {"name": "prompt_fairness_constraint", "rationale": "Generative LLM — add explicit fairness instructions to the decision prompt"}
+        if not is_trainable:
+            return {"name": "threshold_adjustment", "rationale": "External model (HF/REST) — threshold adjustment is the only non-invasive mitigation"}
         if disparity > 0.3:
             return {"name": "sample_reweighing", "rationale": "High disparity requires full reweighing of training distribution"}
         elif disparity > 0.15:

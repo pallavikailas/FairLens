@@ -205,10 +205,12 @@ export default function ResultsPage() {
     nav('/redteam')
   }
 
+  const highRiskProxies = (proxy?.summary?.critical_proxies ?? 0) + (proxy?.summary?.high_proxies ?? 0)
+
   const TABS = [
     { key: 'cartography', label: 'Bias Map', count: carto?.hotspots?.length },
     { key: 'constitution', label: 'Constitution', count: constitution?.summary?.decision_flips },
-    { key: 'proxy', label: 'Proxy Chains', count: proxy?.summary?.critical_proxies },
+    { key: 'proxy', label: 'Proxy Chains', count: highRiskProxies },
   ]
 
   return (
@@ -234,7 +236,7 @@ export default function ResultsPage() {
           { label: 'Samples Analysed', value: carto?.summary?.total_samples?.toLocaleString(), color: 'text-white' },
           { label: 'Bias Hotspots', value: carto?.summary?.hotspot_count, color: 'text-signal-red' },
           { label: 'Decision Flips', value: constitution?.summary?.decision_flips, color: 'text-signal-amber' },
-          { label: 'Critical Proxies', value: proxy?.summary?.critical_proxies, color: 'text-lens-light' },
+          { label: 'High-Risk Proxies', value: highRiskProxies || proxy?.summary?.critical_proxies, color: 'text-lens-light' },
         ].map((card, i) => (
           <div key={i} className="glass rounded-2xl p-4 border border-white/5">
             <div className="text-white/30 text-xs font-mono mb-1">{card.label}</div>

@@ -92,9 +92,10 @@ export default function RedTeamPage() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [allLogs])
 
+  const hasModel = !!store.modelFile || (store.modelType !== 'sklearn' && !!store.modelEndpoint)
+
   const startRedTeam = () => {
-    // Red-team requires a model to generate adversarial probes
-    if (!store.modelFile) return
+    if (!hasModel) return
     if (!store.datasetFile && store.datasetSource === 'upload') return
     if (store.confirmedBiases.length === 0) return
     setRunning(true); setStarted(true)
@@ -131,6 +132,10 @@ export default function RedTeamPage() {
       },
       store.datasetSource,
       store.datasetUrl,
+      store.modelType,
+      store.modelEndpoint,
+      store.llmApiKey,
+      store.hfToken,
     )
     stopRef.current = stop
   }
@@ -176,13 +181,13 @@ export default function RedTeamPage() {
             ))}
           </div>
 
-          {!started && !store.modelFile && (
+          {!started && !hasModel && (
             <div className="mt-6 p-3 rounded-xl bg-signal-red/10 border border-signal-red/20 text-signal-red text-xs font-mono">
-              ⚠ A model file (.pkl) is required for red-team analysis. Go back and upload your model.
+              ⚠ A model is required for red-team analysis. Go back and upload a .pkl file or configure a model endpoint.
             </div>
           )}
 
-          {!started && store.modelFile && (
+          {!started && hasModel && (
             <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
               onClick={startRedTeam}
               className="w-full mt-6 py-3 rounded-xl bg-signal-red hover:bg-signal-red/90 text-white font-display font-semibold text-sm transition-all">

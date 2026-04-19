@@ -149,6 +149,12 @@ export default function AuditPage() {
       )
       store.setCartographyResults(carto)
 
+      // Persist model credentials so RedTeamPage can access them
+      store.setModelType(modelType)
+      store.setModelEndpoint(modelEndpoint)
+      store.setLlmApiKey(resolvedLlmKey)
+      store.setHfToken(hfToken)
+
       // Extract detected columns from response into LOCAL variables to avoid
       // the Zustand stale-closure issue (store.* still holds pre-render values).
       const detectedProtectedCols: string[] = carto.detected_protected_cols?.length

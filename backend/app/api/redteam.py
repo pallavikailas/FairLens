@@ -38,30 +38,67 @@ async def run_redteam(
     audit_results: str = Form(..., description="JSON of combined audit results"),
     dataset_source: str = Form(default="upload"),
     dataset_url: str = Form(default=""),
+    model_type: str = Form(default="sklearn"),
+    api_endpoint: str = Form(default=""),
+    llm_api_key: str = Form(default=""),
+    hf_token: str = Form(default=""),
 ):
     """
     Runs the red-team agent and streams progress as Server-Sent Events.
-    Requires a model file — returns 400 if not provided.
+    Accepts pkl models, HuggingFace, OpenAI, Gemini, and REST API endpoints.
     """
     from app.services.redteam import redteam_agent
     from app.services.auto_detect import auto_detect_columns
+    from app.services.model_adapter import FairLensAdapter
 
-    # Red-team requires a model to generate adversarial probes
-    if model_file is None:
-        raise HTTPException(400, "model_file is required for red-team analysis")
+    model = None
 
-    model_bytes = await model_file.read()
-    if not model_bytes:
-        raise HTTPException(400, "model_file is empty")
+    # Load model based on type
+    if model_file is not None:
+        model_bytes = await model_file.read()
+        if model_bytes:
+            try:
+                try:
+                    raw = pickle.loads(model_bytes)
+                except Exception:
+                    import joblib
+                    raw = joblib.load(io.BytesIO(model_bytes))
+                model = FairLensAdapter.auto_detect(raw)
+            except Exception as e:
+                raise HTTPException(400, f"Failed to load model file: {e}")
 
-    try:
-        model = pickle.loads(model_bytes)
-    except Exception:
+    elif model_type == "huggingface" and api_endpoint:
         try:
-            import joblib
-            model = joblib.load(io.BytesIO(model_bytes))
+            model = FairLensAdapter.from_huggingface(api_endpoint, task="text-classification")
         except Exception as e:
-            raise HTTPException(400, f"Failed to load model file: {e}")
+            raise HTTPException(400, f"Failed to load HuggingFace model '{api_endpoint}': {e}")
+
+    elif model_type == "llm_hf" and api_endpoint:
+        try:
+            model = FairLensAdapter.from_generative_huggingface(api_endpoint, hf_token=hf_token)
+        except Exception as e:
+            raise HTTPException(400, f"Failed to configure HF generative model '{api_endpoint}': {e}")
+
+    elif model_type == "openai" and api_endpoint:
+        try:
+            model = FairLensAdapter.from_openai(model_name=api_endpoint, api_key=llm_api_key)
+        except Exception as e:
+            raise HTTPException(400, f"Failed to configure OpenAI model '{api_endpoint}': {e}")
+
+    elif model_type == "gemini_llm" and api_endpoint:
+        try:
+            model = FairLensAdapter.from_gemini(model_name=api_endpoint, api_key=llm_api_key)
+        except Exception as e:
+            raise HTTPException(400, f"Failed to configure Gemini model '{api_endpoint}': {e}")
+
+    elif model_type == "api" and api_endpoint:
+        try:
+            model = FairLensAdapter.from_api(api_endpoint)
+        except Exception as e:
+            raise HTTPException(400, f"Failed to configure REST API adapter for '{api_endpoint}': {e}")
+
+    if model is None:
+        raise HTTPException(400, "No model provided. Upload a .pkl file or specify a model endpoint.")
 
     dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
     df = pd.read_csv(io.StringIO(dataset_csv))
@@ -85,7 +122,9 @@ async def run_redteam(
         else:
             tgt = df.columns[-1]
 
-    X = df[_resolve_feature_cols(model, df, tgt)]
+    # Try to resolve feature columns from the underlying model object
+    raw_model = getattr(model, "_model", model)
+    X = df[_resolve_feature_cols(raw_model, df, tgt)]
     y = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
     biases = json.loads(confirmed_biases)
     audit = json.loads(audit_results)

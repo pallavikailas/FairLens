@@ -6,7 +6,12 @@ export interface AuditSession {
   datasetFile: File | null
   datasetSource: string
   datasetUrl: string
+  modelType: string
+  modelEndpoint: string
+  llmApiKey: string
+  hfToken: string
   protectedCols: string[]
+
   targetCol: string
   cartographyResults: any | null
   constitutionResults: any | null
@@ -23,6 +28,10 @@ interface AuditStore extends AuditSession {
   setDatasetFile: (f: File | null) => void
   setDatasetSource: (s: string) => void
   setDatasetUrl: (u: string) => void
+  setModelType: (t: string) => void
+  setModelEndpoint: (e: string) => void
+  setLlmApiKey: (k: string) => void
+  setHfToken: (t: string) => void
   setProtectedCols: (cols: string[]) => void
   setTargetCol: (col: string) => void
   setCartographyResults: (r: any) => void
@@ -42,6 +51,10 @@ const initial: AuditSession = {
   datasetFile: null,
   datasetSource: 'upload',
   datasetUrl: '',
+  modelType: 'sklearn',
+  modelEndpoint: '',
+  llmApiKey: '',
+  hfToken: '',
   protectedCols: [],
   targetCol: '',
   cartographyResults: null,
@@ -60,6 +73,10 @@ export const useAuditStore = create<AuditStore>((set) => ({
   setDatasetFile: (datasetFile) => set({ datasetFile }),
   setDatasetSource: (datasetSource) => set({ datasetSource }),
   setDatasetUrl: (datasetUrl) => set({ datasetUrl }),
+  setModelType: (modelType) => set({ modelType }),
+  setModelEndpoint: (modelEndpoint) => set({ modelEndpoint }),
+  setLlmApiKey: (llmApiKey) => set({ llmApiKey }),
+  setHfToken: (hfToken) => set({ hfToken }),
   setProtectedCols: (protectedCols) => set({ protectedCols }),
   setTargetCol: (targetCol) => set({ targetCol }),
   setCartographyResults: (cartographyResults) => set({ cartographyResults }),

@@ -77,6 +77,10 @@ export function streamRedTeam(
   onEvent: (e: any) => void,
   datasetSource: string = 'upload',
   datasetUrl: string = '',
+  modelType: string = 'sklearn',
+  apiEndpoint: string = '',
+  llmApiKey: string = '',
+  hfToken: string = '',
 ): () => void {
   const fd = new FormData()
   if (modelFile) fd.append('model_file', modelFile)
@@ -87,6 +91,10 @@ export function streamRedTeam(
   fd.append('audit_results', JSON.stringify(auditResults))
   fd.append('dataset_source', datasetSource)
   if (datasetUrl) fd.append('dataset_url', datasetUrl)
+  fd.append('model_type', modelType)
+  if (apiEndpoint) fd.append('api_endpoint', apiEndpoint)
+  if (llmApiKey) fd.append('llm_api_key', llmApiKey)
+  if (hfToken) fd.append('hf_token', hfToken)
 
   const controller = new AbortController()
   fetch(`${BASE}/api/v1/redteam/run`, { method: 'POST', body: fd, signal: controller.signal })
