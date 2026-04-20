@@ -6,8 +6,9 @@ calls Gemini-powered BiasCartographyService (no SHAP/UMAP).
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Optional, List
-import uuid, io, httpx, pickle, logging
+import uuid, io, pickle, logging
 import pandas as pd
+import numpy as np
 from sklearn.preprocessing import LabelEncoder
 
 from app.services.cartography import cartography_service

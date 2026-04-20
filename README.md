@@ -10,26 +10,38 @@
 
 ---
 
+## Live Deployment
+
+[![Frontend](https://img.shields.io/badge/Frontend-Live-10b981?style=for-the-badge&logo=google-chrome&logoColor=white)](https://fairlens-frontend-nrk2z2yadq-uc.a.run.app)
+[![Backend](https://img.shields.io/badge/Backend%20API-Live-3b82f6?style=for-the-badge&logo=fastapi&logoColor=white)](https://fairlens-api-nrk2z2yadq-uc.a.run.app)
+[![API Docs](https://img.shields.io/badge/API%20Docs-Swagger-f59e0b?style=for-the-badge&logo=swagger&logoColor=white)](https://fairlens-api-nrk2z2yadq-uc.a.run.app/docs)
+
+---
+
 ## What is FairLens?
 
-FairLens is a **model-agnostic** AI bias detection and remediation platform. It works as a **plugin for any model** — scikit-learn, PyTorch, TensorFlow, HuggingFace, a REST API, or a Vertex AI endpoint — and runs it through a four-stage pipeline that identifies, maps, explains, and fixes hidden bias.
+FairLens is a **model-agnostic** AI bias detection and remediation platform. It works as a **plugin for any model** — scikit-learn, PyTorch, TensorFlow, HuggingFace classifiers, generative LLMs (ChatGPT, Gemini, Llama), a REST API, or a Vertex AI endpoint — and runs it through a six-stage pipeline that identifies, maps, explains, and fixes hidden bias.
 
-**A model file is optional for all stages.** Upload only a CSV dataset and FairLens will auto-detect protected attributes, run Bias Cartography, auto-train a reference model for counterfactual simulation, and trace proxy chains — no manual configuration needed. A model enables deeper analysis; without one, FairLens trains its own Logistic Regression reference to reveal data-level bias.
+**A model is optional.** Upload only a CSV dataset and FairLens will auto-detect protected attributes, run Bias Cartography, auto-train a Logistic Regression reference model for counterfactual simulation, and trace proxy chains — no manual configuration needed.
 
-### The Four Stages
+---
+
+## The Six Stages
 
 | # | Stage | What it does |
 |---|-------|-------------|
-| ⬡ | **Bias Cartography** | Maps bias as a 2D topology across intersectional identity slices. Works with dataset only — no model required. Protected attributes and target column are **auto-detected by Gemini**. When a model is provided, uses its actual predictions instead of ground-truth labels. |
-| ◍ | **Counterfactual Constitution** | Uses Gemini 2.5 Flash to generate a structured document showing what the model would decide if only demographics changed. **When no model is provided, FairLens auto-trains a Logistic Regression reference model** so counterfactual simulation always runs. |
-| ◈ | **Proxy Variable Hunter** | Traces indirect proxy chains (zip code → race, job title → gender) using NetworkX knowledge graphs + Vertex AI embeddings. Requires only a dataset. |
-| ⊘ | **Red-Team Agent** | A LangGraph adversarial agent that attacks confirmed biases and applies mitigation patches — activated only after user confirmation. Works best with a provided model. |
+| 1 | **Upload** | Dataset (CSV or HuggingFace dataset ID) + optional model. Supports 7 model types. Auto-detection handles everything else. |
+| 2 | **Bias Cartography** | Maps bias across intersectional identity slices using statistical metrics + Gemini 2.5 Flash. Works without a model. |
+| 3 | **Counterfactual Constitution** | Generates a structured document showing what the model decides when only demographics change. Auto-trains a Logistic Regression reference when no model is provided. |
+| 4 | **Proxy Variable Hunter** | Traces indirect proxy chains (zip code → race, job title → gender) using a correlation graph + Vertex AI embeddings. Dataset-only. |
+| 5 | **Review** | Interactive results dashboard. User confirms which biases to target before the agent runs. |
+| 6 | **Red-Team Agent** | LangGraph adversarial agent: generates demographic probes, measures disparity, applies type-aware mitigation patches, validates fixes — streamed live via SSE. Works with all model types. |
 
 ---
 
 ## Plugin Architecture — Works With Any Model
 
-FairLens is designed as a **universal bias audit plugin**. Any model can be audited without modifying the model itself:
+FairLens wraps any model through a single adapter interface. **HuggingFace models use the Inference API — no local weights download, safe for serverless deployments.**
 
 ```python
 from app.services.model_adapter import FairLensAdapter
@@ -43,10 +55,19 @@ adapter = FairLensAdapter.from_pytorch(my_net, input_size=20)
 # TensorFlow / Keras
 adapter = FairLensAdapter.from_tensorflow(my_keras_model)
 
-# HuggingFace pipeline or model name
-adapter = FairLensAdapter.from_huggingface("distilbert-base-uncased-finetuned-sst-2-english")
+# HuggingFace text-classification (uses HF Inference API — no local download)
+adapter = FairLensAdapter.from_huggingface("unitary/toxic-bert")
 
-# Any REST API (model behind an endpoint)
+# HuggingFace generative LLM (Gemma, Llama, Mistral — via Inference API)
+adapter = FairLensAdapter.from_generative_huggingface("google/gemma-2-2b-it", hf_token="...")
+
+# OpenAI / ChatGPT
+adapter = FairLensAdapter.from_openai(model_name="gpt-4o", api_key="...")
+
+# Google Gemini
+adapter = FairLensAdapter.from_gemini(model_name="gemini-2.0-flash", api_key="...")
+
+# Any REST API endpoint
 adapter = FairLensAdapter.from_api("https://my-model-api.com", auth_token="...")
 
 # Vertex AI deployed endpoint
@@ -55,31 +76,31 @@ adapter = FairLensAdapter.from_vertex_ai("endpoint-id", project="my-gcp-project"
 # Any Python callable
 adapter = FairLensAdapter.from_callable(my_predict_fn, my_predict_proba_fn)
 
-# Auto-detect from .pkl
+# Auto-detect from a .pkl file
 adapter = FairLensAdapter.from_pickle("model.pkl")
 ```
 
-All adapters expose the same interface: `predict(X)`, `predict_proba(X)`, `get_shap_explainer(X_background)`.
+All adapters expose the same interface: `predict(X)`, `predict_proba(X)`, `get_model_type()`.
 
 ---
 
 ## Testing with Biased Datasets & Models
 
-Use these known-biased sources to verify FairLens is working correctly.
+Use these known-biased sources to verify FairLens is detecting bias correctly.
 
 ### Biased HuggingFace Datasets
 
-Enter these in the **HuggingFace Dataset** source field:
+Enter the dataset ID in the **HuggingFace Dataset** field:
 
 | Dataset ID | Why it's biased |
 |---|---|
 | `mstz/adult` | UCI Adult income — strong gender & race bias in income prediction (classic benchmark) |
 | `iamollas/folktables` | US Census ACS — measurable racial income/employment disparities |
-| `LabHC/bias_in_bios` | Profession prediction from biographies — heavy gender bias (doctors → male, nurses → female). Has a `text` column, works with HuggingFace models. |
+| `LabHC/bias_in_bios` | Profession prediction from biographies — heavy gender bias (doctors → male, nurses → female). Has a `text` column, works directly with HuggingFace classifiers. |
 
 ### Biased HuggingFace Models
 
-Enter these in the **HuggingFace** model type field (requires dataset with a `text` column):
+Select **HuggingFace Classifier** and enter the model ID:
 
 | Model ID | Known bias |
 |---|---|
@@ -89,95 +110,88 @@ Enter these in the **HuggingFace** model type field (requires dataset with a `te
 
 ### Best end-to-end test
 
-Dataset: `LabHC/bias_in_bios` (has `text` + `gender` columns)  
-Model type: HuggingFace → `unitary/toxic-bert`
+**Dataset:** `LabHC/bias_in_bios` · **Model:** HuggingFace Classifier → `unitary/toxic-bert`
 
-This combination exercises the full pipeline including counterfactual simulation, because the dataset has both a `text` column (required for HuggingFace inference) and a `gender` protected attribute for bias measurement.
+This exercises the full pipeline including counterfactual simulation: the dataset has a `text` column (required for HuggingFace inference) and a `gender` protected attribute for bias measurement.
 
 ### Auto-reference model (dataset-only)
 
-If you upload only a CSV with no model, FairLens auto-trains a **Logistic Regression reference model** on your data. The counterfactual constitution then shows what bias a naive model would inherit from the training data — revealing data-level discrimination before any real model is deployed.
+Upload only a CSV with no model. FairLens auto-trains a **Logistic Regression reference model** on your data — the counterfactual constitution then reveals what bias any naive model would inherit from the training data, before a real model is ever deployed.
 
 ---
 
-## Architecture Flowchart
+## Architecture
 
 ```mermaid
 flowchart TD
     U([👤 User]) --> FE[React Frontend\nVite · Tailwind · D3 · Framer Motion]
 
-    FE -->|Upload dataset · model optional| API[FastAPI Backend\nCloud Run · Python 3.11]
+    FE -->|Dataset + optional model| API[FastAPI Backend\nCloud Run · Python 3.11]
 
-    subgraph PLUGIN ["🔌 FairLens Plugin System — Universal Model Adapter"]
+    subgraph PLUGIN ["🔌 Universal Model Adapter"]
         API --> AD{Model Type?}
-        AD -->|sklearn / pkl| SKL[SklearnAdapter\nRF · XGB · LGBM · CatBoost · SVM · Pipeline]
-        AD -->|PyTorch| PT[PyTorchAdapter\nGradientExplainer]
-        AD -->|TensorFlow| TF[TensorFlowAdapter\nGradientExplainer]
-        AD -->|HuggingFace| HF[HuggingFaceAdapter\ntext-classification pipeline]
-        AD -->|REST API| REST[RESTAPIAdapter\nany HTTP endpoint]
-        AD -->|Vertex AI| VAD[VertexAIAdapter\ndeployed endpoint]
-        AD -->|Callable| CA[CallableAdapter\nany Python fn]
-        SKL & PT & TF & HF & REST & VAD & CA --> IFC[BaseModelAdapter interface\npredict · predict_proba · get_shap_explainer]
+        AD -->|sklearn / pkl| SKL[SklearnAdapter]
+        AD -->|PyTorch| PT[PyTorchAdapter]
+        AD -->|TensorFlow| TF[TensorFlowAdapter]
+        AD -->|HuggingFace classifier| HF[HuggingFaceAdapter\nInference API — no local download]
+        AD -->|HF / OpenAI / Gemini LLM| GEN[GenerativeLLMAdapter\ndecision prompts → predict_proba]
+        AD -->|REST API| REST[RESTAPIAdapter]
+        AD -->|Vertex AI| VAD[VertexAIAdapter]
+        AD -->|None| AUTO[Auto-train\nLogisticRegression reference]
+        SKL & PT & TF & HF & GEN & REST & VAD & AUTO --> IFC[BaseModelAdapter\npredict · predict_proba · get_model_type]
     end
 
-    subgraph STAGE1 ["⬡ Stage 1 — Bias Cartography"]
-        IFC --> SH[SHAP Values\nTreeExplainer / KernelExplainer / GradientExplainer]
-        SH --> IS[Intersectional Slices\ngender × race × age_group × ...n]
-        IS --> UM[UMAP Projection\n2D topology of bias space]
-        UM --> DB[DBSCAN Hotspot Detection\nbias cluster identification]
-        DB --> FM[Fairness Metrics per slice\nSPD · DI · Equalized Odds]
+    subgraph STAGE1 ["⬡ Stage 2 — Bias Cartography"]
+        IFC --> IS[Intersectional Slices\nSPD · Disparate Impact · Equalized Odds]
+        IS --> GM1["✦ Gemini 2.5 Flash\nbias hotspot synthesis"]
+        GM1 --> FM[Hotspot Map + Fairness Metrics]
     end
 
-    subgraph STAGE2 ["◍ Stage 2 — Counterfactual Constitution"]
-        FM --> CF[Counterfactual Pair Generation\nflip each protected attribute]
+    subgraph STAGE2 ["◍ Stage 3 — Counterfactual Constitution"]
+        FM --> CF[Counterfactual Pair Generation\nbatch-predict: flip protected attributes]
         CF --> PE[Pattern Extraction\nflip rates · probability deltas]
-        PE --> GM["✦ Gemini 2.5 Flash\nVertex AI synthesis"]
-        GM --> CD[Constitution Document\n7 structured sections · Markdown]
+        PE --> GM2["✦ Gemini 2.5 Flash\nconstitution document synthesis"]
+        GM2 --> CD[7-Section Constitution\nExecutive Summary · Legal Risk · Remediation]
     end
 
-    subgraph STAGE3 ["◈ Stage 3 — Proxy Variable Hunter"]
+    subgraph STAGE3 ["◈ Stage 4 — Proxy Variable Hunter"]
         CD --> CG[NetworkX DiGraph\ncorrelation graph of all features]
-        CG --> PC[Proxy Chain Detection\nall_simple_paths cutoff=4 hops]
-        PC --> VE["✦ Vertex AI Embeddings\ntext-embedding-004 semantic similarity"]
-        VE --> RS[Risk Scoring\ncritical · high · medium · low]
-        RS --> REC[Actionable Recommendations\nremove · audit · monitor]
+        CG --> PC[Proxy Chain Detection\nall_simple_paths · cutoff=4 hops]
+        PC --> VE["✦ Vertex AI text-embedding-004\nsemantic similarity scoring"]
+        VE --> RS[Risk Scoring: critical · high · medium · low]
     end
 
-    subgraph REVIEW ["👁 User Review & Confirmation"]
-        REC --> UI[Results Dashboard\nBias Map · Constitution · Proxy Graph]
-        UI --> CB{User confirms\nbiases to fix?}
+    subgraph REVIEW ["👁 Stage 5 — Review & Confirmation"]
+        RS --> UI[Results Dashboard\nBias Map · Constitution · Proxy Graph]
+        UI --> CB{User confirms\nbiases to target}
     end
 
-    subgraph STAGE4 ["⊘ Stage 4 — Red-Team Agent  〔 SSE live stream 〕"]
+    subgraph STAGE4 ["⊘ Stage 6 — Red-Team Agent  〔 SSE live stream 〕"]
         CB -->|Yes| LG[LangGraph Orchestrator]
         LG --> AA["⚔ Attack Agent\nadversarial demographic probes"]
-        AA --> EA["🔬 Evaluator Agent\nmeasure disparity in outputs"]
-        EA --> DA["⚖ Decision Agent\nGemini selects mitigation strategy"]
-        DA --> PA["🔧 Patcher Agent\nReweighing · Threshold Adj · Feature Ablation"]
+        AA --> EA["🔬 Evaluator Agent\nbatch-predict · measure disparity"]
+        EA --> DA["⚖ Decision Agent\ntype-aware mitigation selection"]
+        DA --> PA["🔧 Patcher Agent\nsklearn: reweighing / threshold / ablation\nLLM: prompt fairness constraint\nHF/REST: threshold adjustment"]
         PA --> VA["✓ Validator Agent\nre-evaluate · flag regressions"]
-        VA -->|bias remains & iter < max| AA
-        VA -->|bias fixed| RA["📋 Report Agent\nfinal structured summary"]
+        VA -->|regressions & iter < 3| AA
+        VA -->|fixed| RA["📋 Report Agent\nfinal structured summary"]
     end
 
     subgraph GCP ["☁ Google Cloud Platform"]
-        BQ[(BigQuery\naudit trail & compliance logs)]
-        GCS[(Cloud Storage\nmodel uploads & reports)]
         VAI["✦ Vertex AI\nGemini 2.5 Flash · text-embedding-004"]
-        CR[Cloud Run\ncontainerised backend & frontend]
+        CR[Cloud Run\nbackend · frontend · 3600s timeout · 4Gi]
         AR[Artifact Registry\nDocker images]
         SM[Secret Manager\nAPI keys]
     end
 
     subgraph CICD ["🔁 CI/CD — GitHub Actions"]
-        GH[Push to main] --> CI[CI: ruff · mypy · pytest · Trivy]
+        GH[Push to main] --> CI[ruff · mypy · pytest · Trivy]
         CI --> BUILD[Docker build]
-        BUILD --> PUSH[Push to Artifact Registry]
-        PUSH --> DEPLOY[Deploy to Cloud Run\nWorkload Identity Federation]
+        BUILD --> PUSH[Artifact Registry]
+        PUSH --> DEPLOY[Cloud Run deploy\nWorkload Identity Federation]
     end
 
-    API --> BQ
-    API --> GCS
-    GM --> VAI
+    GM2 --> VAI
     VE --> VAI
     LG --> VAI
     API --> CR
@@ -201,17 +215,15 @@ flowchart TD
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 18, Vite, TypeScript, Tailwind CSS, D3.js, Framer Motion |
-| State | Zustand |
+| Frontend | React 18, Vite, TypeScript, Tailwind CSS, D3.js, Framer Motion, Zustand |
 | Backend | FastAPI, Python 3.11, Uvicorn |
-| Plugin System | `FairLensAdapter` — wraps any model type |
-| ML / XAI | SHAP, UMAP, DBSCAN, NetworkX, scikit-learn |
-| AI Agents | LangGraph, LangChain |
-| Google AI | **Gemini 2.5 Flash** (Constitution + Red-Team), **Vertex AI text-embedding-004** (Proxy Hunter) |
-| GCP Services | Cloud Run, Vertex AI, BigQuery, Cloud Storage, Artifact Registry, Secret Manager |
+| Plugin System | `FairLensAdapter` — wraps sklearn, PyTorch, TF, HuggingFace, OpenAI, Gemini, REST, Vertex AI |
+| Bias Analysis | Statistical fairness metrics (SPD, DI, Equalized Odds), NetworkX correlation graphs |
+| AI Agents | LangGraph multi-agent orchestration |
+| Google AI | **Gemini 2.5 Flash** (Cartography + Constitution + Red-Team decision), **Vertex AI text-embedding-004** (Proxy Hunter) |
+| GCP Services | Cloud Run, Vertex AI, Artifact Registry, Secret Manager |
 | CI/CD | GitHub Actions → Artifact Registry → Cloud Run (Workload Identity Federation) |
 | IaC | Terraform |
-| Containers | Docker (multi-stage builds), Nginx |
 
 ---
 
@@ -225,7 +237,7 @@ cd fairlens
 # 2. Backend
 cd backend
 pip install -r requirements.txt
-cp .env.example .env          # Fill in GOOGLE_CLOUD_PROJECT etc.
+cp .env.example .env          # fill in GOOGLE_CLOUD_PROJECT etc.
 uvicorn app.main:app --reload --port 8000
 
 # 3. Frontend (new terminal)
@@ -237,16 +249,20 @@ npm run dev
 
 ---
 
-## GCP Deployment (one command after setup)
+## GCP Deployment
 
 ```bash
-# Push to main — GitHub Actions handles the rest:
-git push origin main
+# Push to main — GitHub Actions handles the rest automatically.
 
 # Or deploy manually:
-cd backend
-gcloud run deploy fairlens-api --source . --region us-central1 --allow-unauthenticated \
-  --memory 2Gi --cpu 2 --set-env-vars GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
+gcloud run deploy fairlens-api \
+  --source ./backend \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --memory 4Gi \
+  --cpu 2 \
+  --timeout 3600 \
+  --set-env-vars GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
 ```
 
 See [`docs/GCP_SETUP.md`](docs/GCP_SETUP.md) for full Terraform + Workload Identity setup.
@@ -265,25 +281,24 @@ fairlens/
 │   │   ├── api/                    # FastAPI route handlers (one per stage)
 │   │   ├── core/                   # Config, logging
 │   │   └── services/
-│   │       ├── model_adapter.py    # ← Universal plugin adapter (all model types)
-│   │       ├── cartography.py      # Stage 1: SHAP + UMAP bias topology
-│   │       ├── constitution.py     # Stage 2: Gemini counterfactual document
-│   │       ├── proxy_hunter.py     # Stage 3: NetworkX + Vertex AI proxy chains
-│   │       ├── redteam.py          # Stage 4: LangGraph adversarial agent
-│   │       └── gcp_client.py       # BigQuery + Cloud Storage singletons
-│   ├── tests/
-│   │   ├── test_cartography.py
-│   │   └── test_model_adapter.py   # Tests all adapter types
+│   │       ├── model_adapter.py    # Universal plugin adapter (all model types)
+│   │       ├── cartography.py      # Stage 2: statistical bias mapping + Gemini
+│   │       ├── constitution.py     # Stage 3: counterfactual simulation + Gemini
+│   │       ├── proxy_hunter.py     # Stage 4: NetworkX proxy chains + Vertex AI
+│   │       ├── redteam.py          # Stage 6: LangGraph adversarial agent
+│   │       ├── dataset_loader.py   # CSV upload + HuggingFace dataset streaming
+│   │       ├── auto_detect.py      # Gemini-powered column detection
+│   │       └── gemini_client.py    # Vertex AI / Gemini client
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/
 │   └── src/
 │       ├── pages/
-│       │   ├── LandingPage.tsx     # Hero · real-world examples · pipeline overview
-│       │   ├── AuditPage.tsx       # Model type selector + upload + column config
-│       │   ├── ResultsPage.tsx     # D3 bias map · constitution viewer · proxy graph · confirm UI
-│       │   └── RedTeamPage.tsx     # Live SSE agent feed · before/after metrics · export
-│       ├── hooks/useAuditStore.ts  # Zustand global state across all 4 stages
+│       │   ├── LandingPage.tsx     # Hero · pipeline overview · real-world examples
+│       │   ├── AuditPage.tsx       # Model type selector · upload · dataset config
+│       │   ├── ResultsPage.tsx     # D3 bias map · constitution · proxy graph · confirm UI
+│       │   └── RedTeamPage.tsx     # Live SSE agent feed · mitigation results
+│       ├── hooks/useAuditStore.ts  # Zustand global state (persists across all 6 stages)
 │       └── utils/api.ts            # Typed fetch wrappers + SSE consumer
 ├── infrastructure/
 │   └── terraform/main.tf           # Provisions all GCP resources
@@ -294,15 +309,13 @@ fairlens/
 
 ---
 
-## Adding a Custom Model (Plugin Guide)
+## Adding a Custom Model
 
-To audit a model type not listed above, implement `BaseModelAdapter`:
+Implement `BaseModelAdapter` to audit any model type not listed above:
 
 ```python
 from app.services.model_adapter import BaseModelAdapter
-import pandas as pd
-import numpy as np
-import shap
+import pandas as pd, numpy as np
 
 class MyCustomAdapter(BaseModelAdapter):
     def __init__(self, my_model):
@@ -312,19 +325,14 @@ class MyCustomAdapter(BaseModelAdapter):
         return self.model.infer(X.values)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        scores = self.model.score(X.values)          # shape (n,)
+        scores = self.model.score(X.values)
         return np.column_stack([1 - scores, scores])
 
     def get_model_type(self) -> str:
         return "MyCustomModel"
-
-# Use it:
-adapter = MyCustomAdapter(my_model)
-# Pass adapter to any FairLens service:
-results = await cartography_service.run_cartography(model=adapter, X=X, ...)
 ```
 
-That's it. The adapter pattern means FairLens never needs to know what your model is internally.
+Pass the adapter to any FairLens service — no other changes needed.
 
 ---
 
@@ -332,12 +340,12 @@ That's it. The adapter pattern means FairLens never needs to know what your mode
 
 | Field | Value |
 |-------|-------|
-| Challenge | [Unbiased AI Decision] Ensuring Fairness and Detecting Bias in Automated Decisions |
+| Challenge | Ensuring Fairness and Detecting Bias in Automated Decisions |
 | UN SDG Alignment | SDG 10 (Reduced Inequalities), SDG 16 (Justice & Strong Institutions) |
-| Google AI Used | Gemini 2.5 Flash via Vertex AI |
-| GCP Services | Cloud Run · Vertex AI · BigQuery · Cloud Storage · Artifact Registry · Secret Manager |
-| Deployed | `gcloud run deploy` via GitHub Actions on every push to `main` |
+| Google AI Used | Gemini 2.5 Flash · Vertex AI text-embedding-004 |
+| GCP Services | Cloud Run · Vertex AI · Artifact Registry · Secret Manager |
+| Deployment | GitHub Actions → Cloud Run on every push to `main` |
 
 ---
 
-*Built with ❤️ for Google Solution Challenge 2026*
+*Built for Google Solution Challenge 2026*

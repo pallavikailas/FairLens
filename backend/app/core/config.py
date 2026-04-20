@@ -11,17 +11,11 @@ class Settings(BaseSettings):
     # GCP
     GOOGLE_CLOUD_PROJECT: str = "fairlens-493318"
     GOOGLE_CLOUD_REGION: str = "us-central1"
-    GCS_BUCKET_NAME: str = "fairlens-models"
 
     # Vertex AI — used for Gemini 2.5 Flash and text embeddings
     VERTEX_AI_LOCATION: str = "us-central1"
     VERTEX_EMBEDDING_MODEL: str = "text-embedding-004"
     GEMINI_MODEL: str = "gemini-2.5-flash"
-
-    # BigQuery
-    BIGQUERY_DATASET: str = "fairlens_audit"
-    BIGQUERY_TABLE_AUDITS: str = "bias_audits"
-    BIGQUERY_TABLE_DECISIONS: str = "decision_logs"
 
     # Red-team agent
     REDTEAM_MAX_ITERATIONS: int = 3

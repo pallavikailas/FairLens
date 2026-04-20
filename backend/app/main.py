@@ -3,9 +3,8 @@ FairLens Backend — FastAPI Application
 Bias detection and remediation platform for Google Solution Challenge 2026.
 """
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 import uvicorn
 
 # Raise multipart form field size limit (default ~1MB is too small for audit results)
