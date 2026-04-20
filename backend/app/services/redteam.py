@@ -152,7 +152,9 @@ class FairnessRedTeamAgent:
                 "status": node_state.get("status", "running"),
             }
 
-        yield {"node": "complete", "status": "done", "results": state}
+        # Strip non-serialisable fields (DataFrame, ndarray, model object) from final state
+        safe_state = {k: v for k, v in state.items() if k not in ("model", "X_train", "y_train")}
+        yield {"node": "complete", "status": "done", "results": safe_state}
 
     # ── Agent Nodes ──────────────────────────────────────────────────────────
 
@@ -266,8 +268,9 @@ class FairnessRedTeamAgent:
             })
 
         n_confirmed = sum(1 for e in evaluation if e["bias_confirmed"])
+        disparity_summary = ", ".join(f"{e['attribute']}={e['disparity']:.3f}" for e in evaluation)
         log.append(f"[Evaluator Agent] Bias confirmed in {n_confirmed}/{len(evaluation)} attributes "
-                   f"(disparities: {', '.join(f'{e[\"attribute\"]}={e[\"disparity\"]:.3f}' for e in evaluation)})")
+                   f"(disparities: {disparity_summary})")
         return {**state, "evaluation_results": evaluation, "log": log}
 
     def _decide_patch_node(self, state: Dict) -> Dict:

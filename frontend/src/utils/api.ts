@@ -88,7 +88,13 @@ export function streamRedTeam(
   fd.append('protected_cols', protectedCols.length > 0 ? protectedCols.join(',') : 'auto')
   fd.append('target_col', targetCol || 'auto')
   fd.append('confirmed_biases', JSON.stringify(confirmedBiases))
-  fd.append('audit_results', JSON.stringify(auditResults))
+  // Send only summaries — full results can be several MB and exceed form field limits
+  const auditSummary = {
+    cartography: { summary: auditResults?.cartography?.summary, audit_id: auditResults?.cartography?.audit_id },
+    constitution: { summary: auditResults?.constitution?.summary },
+    proxy: { summary: auditResults?.proxy?.summary },
+  }
+  fd.append('audit_results', JSON.stringify(auditSummary))
   fd.append('dataset_source', datasetSource)
   if (datasetUrl) fd.append('dataset_url', datasetUrl)
   fd.append('model_type', modelType)

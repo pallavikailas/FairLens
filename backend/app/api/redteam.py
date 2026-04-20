@@ -2,10 +2,11 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import Optional, List
-import pandas as pd, numpy as np, pickle, io, uuid, json, asyncio
+import pandas as pd, numpy as np, pickle, io, uuid, json, asyncio, logging
 
 from app.services.dataset_loader import load_dataset_csv
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -100,15 +101,25 @@ async def run_redteam(
     if model is None:
         raise HTTPException(400, "No model provided. Upload a .pkl file or specify a model endpoint.")
 
-    dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
-    df = pd.read_csv(io.StringIO(dataset_csv))
+    try:
+        dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
+    except Exception as e:
+        raise HTTPException(400, f"Failed to load dataset: {e}")
+
+    try:
+        df = pd.read_csv(io.StringIO(dataset_csv))
+    except Exception as e:
+        raise HTTPException(400, f"Failed to parse dataset CSV: {e}")
 
     # Resolve protected_cols and target_col — handle 'auto' sentinel
     is_auto = protected_cols in ("auto", "", "['auto']") or "auto" in protected_cols.split(",")
     if is_auto:
-        detected = await auto_detect_columns(dataset_csv, str(uuid.uuid4())[:8])
-        protected = detected["protected_cols"]
-        tgt = detected["target_col"]
+        try:
+            detected = await auto_detect_columns(dataset_csv, str(uuid.uuid4())[:8])
+            protected = detected["protected_cols"]
+            tgt = detected["target_col"]
+        except Exception as e:
+            raise HTTPException(500, f"Auto-detect columns failed: {e}")
     else:
         protected = [c.strip() for c in protected_cols.split(",") if c.strip() and c.strip() != "auto"]
         tgt = target_col if target_col and target_col != "auto" else None
@@ -123,17 +134,49 @@ async def run_redteam(
             tgt = df.columns[-1]
 
     # Try to resolve feature columns from the underlying model object
-    raw_model = getattr(model, "_model", model)
+    raw_model = getattr(model, "model", None) or model  # SklearnAdapter.model = raw sklearn
     X = df[_resolve_feature_cols(raw_model, df, tgt)]
     y = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
-    biases = json.loads(confirmed_biases)
-    audit = json.loads(audit_results)
+
+    try:
+        biases = json.loads(confirmed_biases)
+    except Exception as e:
+        raise HTTPException(400, f"confirmed_biases is not valid JSON: {e}")
+
+    # audit_results is optional context — the agent nodes don't need the full output
+    try:
+        audit = json.loads(audit_results) if audit_results else {}
+    except Exception:
+        audit = {}
+
     audit_id = str(uuid.uuid4())[:8]
 
+    def _safe_json(obj):
+        """Convert an SSE event dict to a JSON string, skipping non-serializable values."""
+        def default(o):
+            import pandas as pd
+            import numpy as np
+            if isinstance(o, (np.integer,)):
+                return int(o)
+            if isinstance(o, (np.floating,)):
+                return float(o)
+            if isinstance(o, np.ndarray):
+                return o.tolist()
+            if isinstance(o, pd.DataFrame):
+                return f"<DataFrame {o.shape}>"
+            return str(o)
+        return json.dumps(obj, default=default)
+
     async def event_stream():
-        async for event in redteam_agent.run(model, X, y, audit, biases, audit_id):
-            yield f"data: {json.dumps(event)}\n\n"
-            await asyncio.sleep(0)
+        try:
+            async for event in redteam_agent.run(model, X, y, audit, biases, audit_id):
+                yield f"data: {_safe_json(event)}\n\n"
+                await asyncio.sleep(0)
+        except Exception as e:
+            import traceback
+            err_msg = traceback.format_exc()
+            logger.error(f"[{audit_id}] Red-team agent error: {err_msg}")
+            yield f"data: {json.dumps({'node': 'error', 'status': 'error', 'log': [f'Agent error: {e}']})}\n\n"
 
     return StreamingResponse(
         event_stream(),
