@@ -2,14 +2,13 @@
 
 > *"Computer programs now make life-changing decisions about who gets a job, a loan, or medical care. FairLens makes sure those decisions are fair."*
 
-[![CI](https://github.com/pallavikailas/fairlens/actions/workflows/ci.yml/badge.svg)](https://github.com/pallavikailas/fairlens/actions/workflows/ci.yml)
-[![Deploy](https://github.com/pallavikailas/fairlens/actions/workflows/deploy.yml/badge.svg)](https://github.com/pallavikailas/fairlens/actions/workflows/deploy.yml)
-[![Google Solution Challenge 2026](https://img.shields.io/badge/Google%20Solution%20Challenge-2026-4285F4?logo=google)](https://hack2skill.com/event/build-with-ai?tab=solutionchallenge2026&utm_source=hack2skill&utm_medium=homepage)
-[![SDG 10](https://img.shields.io/badge/UN%20SDG-10%20Reduced%20Inequalities-E5243B)](https://sdgs.un.org/goals/goal10)
-[![SDG 16](https://img.shields.io/badge/UN%20SDG-16%20Justice-00689D)](https://sdgs.un.org/goals/goal16)
 [![Frontend](https://img.shields.io/badge/Frontend-Live-10b981?style=for-the-badge&logo=google-chrome&logoColor=white)](https://fairlens-frontend-nrk2z2yadq-uc.a.run.app)
 [![Backend](https://img.shields.io/badge/Backend%20API-Live-3b82f6?style=for-the-badge&logo=fastapi&logoColor=white)](https://fairlens-api-nrk2z2yadq-uc.a.run.app)
 [![API Docs](https://img.shields.io/badge/API%20Docs-Swagger-f59e0b?style=for-the-badge&logo=swagger&logoColor=white)](https://fairlens-api-nrk2z2yadq-uc.a.run.app/docs)
+
+[![CI](https://github.com/pallavikailas/fairlens/actions/workflows/ci.yml/badge.svg)](https://github.com/pallavikailas/fairlens/actions/workflows/ci.yml)
+[![Deploy](https://github.com/pallavikailas/fairlens/actions/workflows/deploy.yml/badge.svg)](https://github.com/pallavikailas/fairlens/actions/workflows/deploy.yml)
+[![Google Solution Challenge 2026](https://img.shields.io/badge/Google%20Solution%20Challenge-2026-4285F4?logo=google)](https://hack2skill.com/event/build-with-ai?tab=solutionchallenge2026&utm_source=hack2skill&utm_medium=homepage)
 
 ---
 
