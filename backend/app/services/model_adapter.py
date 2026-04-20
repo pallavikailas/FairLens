@@ -243,7 +243,9 @@ class HuggingFaceAdapter(BaseModelAdapter):
     "key: value" strings so any text classifier can score them.
     """
 
-    _HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/{model}"
+    # New HF Inference Providers URL (requires token); legacy URL as fallback
+    _HF_INFERENCE_URL = "https://router.huggingface.co/hf-inference/models/{model}"
+    _HF_LEGACY_URL = "https://api-inference.huggingface.co/models/{model}"
 
     def __init__(self, model_name: Any, task: str = "text-classification", hf_token: str = ""):
         # Accept a string model name or a pre-built pipeline object (legacy path)
@@ -271,20 +273,37 @@ class HuggingFaceAdapter(BaseModelAdapter):
     def _query_api(self, texts: list[str]) -> list[dict]:
         """Call HF Inference API; batch up to 8 texts per request."""
         import requests
-        url = self._HF_INFERENCE_URL.format(model=self.model_name)
         headers = {"Content-Type": "application/json"}
         if self.hf_token:
             headers["Authorization"] = f"Bearer {self.hf_token}"
+
+        # Try new router URL first, fall back to legacy URL
+        primary_url = self._HF_INFERENCE_URL.format(model=self.model_name)
+        fallback_url = self._HF_LEGACY_URL.format(model=self.model_name)
 
         results = []
         batch_size = 8
         for i in range(0, len(texts), batch_size):
             batch = texts[i: i + batch_size]
-            resp = requests.post(url, json={"inputs": batch}, headers=headers, timeout=30)
+            resp = requests.post(primary_url, json={"inputs": batch}, headers=headers, timeout=30)
+
+            # Fall back to legacy URL on 404 (model not on new router yet)
+            if resp.status_code == 404 and primary_url != fallback_url:
+                resp = requests.post(fallback_url, json={"inputs": batch}, headers=headers, timeout=30)
+
             if resp.status_code == 503:
                 raise RuntimeError(
-                    f"HuggingFace model '{self.model_name}' is loading on the Inference API "
-                    "— wait ~20 s and retry."
+                    f"HuggingFace model '{self.model_name}' is loading — wait ~20s and retry."
+                )
+            if resp.status_code in (401, 403):
+                raise ValueError(
+                    f"HuggingFace model '{self.model_name}' requires authentication. "
+                    "Enter your HF token in the 'HuggingFace Token' field."
+                )
+            if resp.status_code == 404:
+                raise ValueError(
+                    f"HuggingFace model '{self.model_name}' not found on the Inference API. "
+                    "Check the model ID at huggingface.co or try a different model."
                 )
             resp.raise_for_status()
             data = resp.json()
@@ -365,8 +384,8 @@ class GenerativeLLMAdapter(BaseModelAdapter):
         "Decision (YES or NO):"
     )
 
-    # HuggingFace Inference API endpoint — no local model download required
-    _HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/{model}"
+    _HF_INFERENCE_URL = "https://router.huggingface.co/hf-inference/models/{model}"
+    _HF_LEGACY_URL = "https://api-inference.huggingface.co/models/{model}"
 
     def __init__(
         self,
@@ -460,7 +479,6 @@ class GenerativeLLMAdapter(BaseModelAdapter):
     def _query_huggingface(self, prompt: str) -> float:
         """Call HuggingFace Inference API — no local model download."""
         import requests
-        url = self._HF_INFERENCE_URL.format(model=self.model_name)
         headers = {"Content-Type": "application/json"}
         if self.hf_token:
             headers["Authorization"] = f"Bearer {self.hf_token}"
@@ -472,17 +490,24 @@ class GenerativeLLMAdapter(BaseModelAdapter):
                 "temperature": 0.01,
             },
         }
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        primary_url = self._HF_INFERENCE_URL.format(model=self.model_name)
+        fallback_url = self._HF_LEGACY_URL.format(model=self.model_name)
+        resp = requests.post(primary_url, json=payload, headers=headers, timeout=30)
+        if resp.status_code == 404:
+            resp = requests.post(fallback_url, json=payload, headers=headers, timeout=30)
         if resp.status_code == 503:
             raise RuntimeError(
-                f"HuggingFace model '{self.model_name}' is loading on the Inference API — "
-                "wait ~20s and retry, or use a smaller/always-on model."
+                f"HuggingFace model '{self.model_name}' is loading — wait ~20s and retry."
+            )
+        if resp.status_code in (401, 403):
+            raise ValueError(
+                f"HuggingFace model '{self.model_name}' requires authentication. "
+                "Enter your HF token in the 'HuggingFace Token' field."
             )
         if resp.status_code == 404:
             raise ValueError(
-                f"Model '{self.model_name}' returned 404 from HuggingFace Inference API. "
-                "It is likely a text-classification model, not a generative one. "
-                "Select 'HuggingFace Classifier' instead of 'HuggingFace Generative LLM'."
+                f"Model '{self.model_name}' not found on HuggingFace Inference API. "
+                "It may be a text-classification model — try 'HuggingFace Classifier' instead."
             )
         resp.raise_for_status()
         data = resp.json()
