@@ -113,7 +113,7 @@ resource "google_cloud_run_v2_service" "backend" {
 
   template {
     service_account = google_service_account.fairlens_backend.email
-    timeout         = "3600s"
+    timeout         = "600s"
 
     scaling {
       min_instance_count = 0

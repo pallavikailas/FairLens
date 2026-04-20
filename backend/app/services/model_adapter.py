@@ -395,7 +395,7 @@ class GenerativeLLMAdapter(BaseModelAdapter):
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         probas = []
         for _, row in X.iterrows():
-            p = self._query(row)
+            p = self._query(row)  # raises ValueError on permanent failures (404 etc.)
             probas.append([1.0 - p, p])
         return np.array(probas)
 
@@ -439,6 +439,9 @@ class GenerativeLLMAdapter(BaseModelAdapter):
                 return self._query_huggingface(prompt)
             if self.backend == "gemini":
                 return self._query_gemini(prompt)
+        except ValueError:
+            # Hard/permanent errors (e.g. 404 wrong model type) — re-raise so callers can surface them
+            raise
         except Exception as exc:
             logger.warning(f"[GenerativeLLMAdapter] query failed: {exc}")
         return 0.5
@@ -474,6 +477,12 @@ class GenerativeLLMAdapter(BaseModelAdapter):
             raise RuntimeError(
                 f"HuggingFace model '{self.model_name}' is loading on the Inference API — "
                 "wait ~20s and retry, or use a smaller/always-on model."
+            )
+        if resp.status_code == 404:
+            raise ValueError(
+                f"Model '{self.model_name}' returned 404 from HuggingFace Inference API. "
+                "It is likely a text-classification model, not a generative one. "
+                "Select 'HuggingFace Classifier' instead of 'HuggingFace Generative LLM'."
             )
         resp.raise_for_status()
         data = resp.json()

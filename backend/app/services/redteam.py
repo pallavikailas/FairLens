@@ -67,6 +67,8 @@ class FairnessRedTeamAgent:
         """Predict with automatic label-encoding fallback for categorical columns."""
         try:
             return model.predict(X)
+        except ValueError:
+            raise  # permanent failures (wrong model type, 404) — don't mask or retry
         except Exception:
             X_enc = X.copy()
             le = LabelEncoder()
