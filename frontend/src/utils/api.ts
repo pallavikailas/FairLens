@@ -67,6 +67,24 @@ export async function runProxyHunter(
   return res.json()
 }
 
+export async function exportPdfReport(result: any): Promise<void> {
+  const res = await fetch(`${BASE}/api/v1/reports/pdf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(result),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `fairlens-report-${result?.audit_id ?? 'audit'}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 export function streamRedTeam(
   modelFile: File | null,
   datasetFile: File | null,
