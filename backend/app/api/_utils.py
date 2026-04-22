@@ -1,6 +1,9 @@
 """Shared helpers for API route handlers."""
 from typing import List
+import logging
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_feature_cols(model, df: pd.DataFrame, fallback_target: str) -> List[str]:
