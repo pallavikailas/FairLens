@@ -504,10 +504,11 @@ class GenerativeLLMAdapter(BaseModelAdapter):
                 f"HuggingFace model '{self.model_name}' requires authentication. "
                 "Enter your HF token in the 'HuggingFace Token' field."
             )
-        if resp.status_code == 404:
+        if resp.status_code in (400, 404):
             raise ValueError(
-                f"Model '{self.model_name}' not found on HuggingFace Inference API. "
-                "It may be a text-classification model — try 'HuggingFace Classifier' instead."
+                f"Model '{self.model_name}' is not a generative/text-generation model "
+                f"(HTTP {resp.status_code}). Select 'HuggingFace Classifier' instead of "
+                "'HuggingFace Generative LLM'."
             )
         resp.raise_for_status()
         data = resp.json()
