@@ -1,37 +1,19 @@
 """API routes for Counterfactual Constitution."""
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
-from typing import Optional, List
+from typing import Optional
 import pandas as pd
 import numpy as np
-import pickle, io, uuid, json, asyncio
+import pickle, io, uuid, json, asyncio, logging
 from sklearn.preprocessing import LabelEncoder
 
 from app.services.constitution import constitution_service
 from app.services.auto_detect import auto_detect_columns
 from app.services.dataset_loader import load_dataset_csv
+from app.api._utils import resolve_feature_cols
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _resolve_feature_cols(model, df: pd.DataFrame, fallback_target: str) -> List[str]:
-    if hasattr(model, "feature_names_in_"):
-        names = list(model.feature_names_in_)
-        if names and all(n in df.columns for n in names):
-            return names
-    if hasattr(model, "feature_names") and model.feature_names:
-        names = model.feature_names
-        if all(n in df.columns for n in names):
-            return list(names)
-    if hasattr(model, "feature_name_"):
-        try:
-            names = model.feature_name_()
-            if names and all(n in df.columns for n in names):
-                return list(names)
-        except Exception:
-            pass
-    return [c for c in df.columns if c != fallback_target]
-
 
 
 
@@ -132,7 +114,7 @@ async def generate_constitution(
             except Exception as e:
                 raise HTTPException(400, f"Failed to initialise Gemini model '{api_endpoint}': {e}")
 
-        feature_cols = _resolve_feature_cols(model, df, tgt) if model is not None else [c for c in df.columns if c != tgt]
+        feature_cols = resolve_feature_cols(model, df, tgt) if model is not None else [c for c in df.columns if c != tgt]
         X = df[feature_cols]
 
         # Auto-train a reference model when none is provided so counterfactual simulation always runs
@@ -173,15 +155,9 @@ async def generate_constitution(
                     predict_proba_fn=lambda X_in: auto_clf.predict_proba(_encode_df(X_in)),
                     model_name="AutoReference_LogisticRegression",
                 )
-                import logging as _log
-                _log.getLogger(__name__).info(
-                    f"[{audit_id}] Auto-trained reference LogisticRegression for counterfactual simulation"
-                )
+                logger.info(f"[{audit_id}] Auto-trained reference LogisticRegression for counterfactual simulation")
             except Exception as _e:
-                import logging as _log
-                _log.getLogger(__name__).warning(
-                    f"[{audit_id}] Auto-training failed, constitution will use dataset-only mode: {_e}"
-                )
+                logger.warning(f"[{audit_id}] Auto-training failed, constitution will use dataset-only mode: {_e}")
 
         # Generate predictions
         if model is not None:

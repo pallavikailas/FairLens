@@ -205,7 +205,6 @@ Return ONLY this JSON:
         ci: float = 0.95,
     ) -> dict:
         """Bootstrap confidence intervals for SPD per protected attribute value."""
-        import pandas as pd
         if protected_col not in df.columns:
             return {}
 

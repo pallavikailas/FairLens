@@ -307,11 +307,18 @@ class HuggingFaceAdapter(BaseModelAdapter):
                 )
             resp.raise_for_status()
             data = resp.json()
-            # API returns list-of-lists for batch input
-            if data and isinstance(data[0], list):
-                results.extend(data)
+            if not isinstance(data, list):
+                results.extend([[{"label": "UNKNOWN", "score": 0.5}]] * len(batch))
+                continue
+            # Normalise to exactly one entry per input text.
+            # New HF router sometimes double-wraps: [[r1, r2, ...r8]] instead of [r1, r2, ...r8]
+            if len(data) == 1 and isinstance(data[0], list) and len(data[0]) == len(batch):
+                items = data[0]  # unwrap one level
+            elif len(data) == len(batch):
+                items = data
             else:
-                results.extend([[item] if isinstance(item, dict) else item for item in data])
+                items = data  # best-effort fallback
+            results.extend([item if isinstance(item, list) else [item] for item in items])
         return results
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:

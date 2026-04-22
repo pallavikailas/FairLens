@@ -114,6 +114,8 @@ class CounterfactualConstitutionService:
         indices = np.random.choice(len(X), min(n_samples, len(X)), replace=False)
 
         for idx in indices:
+            if idx >= len(y_pred):
+                continue  # guard against predict returning fewer rows than X
             row = X.iloc[idx].copy()
             original_pred = y_pred[idx]
 

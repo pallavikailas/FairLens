@@ -1,32 +1,16 @@
 """API routes for Fairness Red-Team Agent — streams progress via SSE."""
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
-from typing import Optional, List
-import pandas as pd, numpy as np, pickle, io, uuid, json, asyncio, logging
+from typing import Optional
+import pandas as pd
+import numpy as np
+import pickle, io, uuid, json, asyncio, logging
 
 from app.services.dataset_loader import load_dataset_csv
+from app.api._utils import resolve_feature_cols
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _resolve_feature_cols(model, df: pd.DataFrame, fallback_target: str) -> List[str]:
-    if hasattr(model, "feature_names_in_"):
-        names = list(model.feature_names_in_)
-        if names and all(n in df.columns for n in names):
-            return names
-    if hasattr(model, "feature_names") and model.feature_names:
-        names = model.feature_names
-        if all(n in df.columns for n in names):
-            return list(names)
-    if hasattr(model, "feature_name_"):
-        try:
-            names = model.feature_name_()
-            if names and all(n in df.columns for n in names):
-                return list(names)
-        except Exception:
-            pass
-    return [c for c in df.columns if c != fallback_target]
 
 
 @router.post("/run")
@@ -73,12 +57,6 @@ async def run_redteam(
             model = FairLensAdapter.from_huggingface_auto(api_endpoint, hf_token=hf_token)
         except Exception as e:
             raise HTTPException(400, f"Failed to load HuggingFace model '{api_endpoint}': {e}")
-
-    elif model_type == "llm_hf" and api_endpoint:
-        try:
-            model = FairLensAdapter.from_generative_huggingface(api_endpoint, hf_token=hf_token)
-        except Exception as e:
-            raise HTTPException(400, f"Failed to configure HF generative model '{api_endpoint}': {e}")
 
     elif model_type == "openai" and api_endpoint:
         try:
@@ -134,8 +112,8 @@ async def run_redteam(
             tgt = df.columns[-1]
 
     # Try to resolve feature columns from the underlying model object
-    raw_model = getattr(model, "model", None) or model  # SklearnAdapter.model = raw sklearn
-    X = df[_resolve_feature_cols(raw_model, df, tgt)]
+    raw_model = getattr(model, "model", None) or model
+    X = df[resolve_feature_cols(raw_model, df, tgt)]
     y = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
 
     try:
@@ -152,13 +130,10 @@ async def run_redteam(
     audit_id = str(uuid.uuid4())[:8]
 
     def _safe_json(obj):
-        """Convert an SSE event dict to a JSON string, skipping non-serializable values."""
         def default(o):
-            import pandas as pd
-            import numpy as np
-            if isinstance(o, (np.integer,)):
+            if isinstance(o, np.integer):
                 return int(o)
-            if isinstance(o, (np.floating,)):
+            if isinstance(o, np.floating):
                 return float(o)
             if isinstance(o, np.ndarray):
                 return o.tolist()

@@ -1,53 +1,19 @@
-"""
-Cartography API — cloud-native version.
-Accepts dataset from upload or online sources, auto-detects columns,
-calls Gemini-powered BiasCartographyService (no SHAP/UMAP).
-"""
+"""Cartography API — Gemini-powered bias mapping (no SHAP/UMAP)."""
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
-from typing import Optional, List
+from typing import Optional
 import uuid, io, pickle, logging
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder
 
 from app.services.cartography import cartography_service
 from app.services.auto_detect import auto_detect_columns
 from app.services.dataset_loader import load_dataset_csv
 from app.services.compliance_mapper import check_compliance
+from app.api._utils import resolve_feature_cols
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
-
-
-def _resolve_feature_cols(model, df: pd.DataFrame, fallback_target: str) -> List[str]:
-    """
-    Return the feature columns the model actually expects.
-    Prefers the model's own stored feature names (set during fit) over guessing
-    from target_col, which avoids mismatch errors when auto-detection picks
-    the wrong target.
-    """
-    # sklearn >= 1.0 and XGBoost sklearn API store feature_names_in_
-    if hasattr(model, "feature_names_in_"):
-        names = list(model.feature_names_in_)
-        if names and all(n in df.columns for n in names):
-            return names
-    # XGBoost native booster stores feature_names
-    if hasattr(model, "feature_names") and model.feature_names:
-        names = model.feature_names
-        if all(n in df.columns for n in names):
-            return list(names)
-    # LightGBM exposes feature_name() method
-    if hasattr(model, "feature_name_"):
-        try:
-            names = model.feature_name_()
-            if names and all(n in df.columns for n in names):
-                return list(names)
-        except Exception:
-            pass
-    # Fall back to excluding the detected target column
-    return [c for c in df.columns if c != fallback_target]
 
 
 
@@ -107,17 +73,17 @@ async def analyze_bias_cartography(
                         import joblib
                         clf = joblib.load(io.BytesIO(model_bytes))
                     df_pred = pd.read_csv(io.StringIO(dataset_csv))
-                    feature_cols = _resolve_feature_cols(clf, df_pred, target)
+                    feature_cols = resolve_feature_cols(clf, df_pred, target)
                     # If model knows its own features, infer the true target as whatever column is left out
                     non_feature_cols = [c for c in df_pred.columns if c not in feature_cols]
                     if non_feature_cols and non_feature_cols[0] != target:
                         logger.info(f"[{audit_id}] Overriding auto-detected target '{target}' → '{non_feature_cols[0]}' (from model feature names)")
                         target = non_feature_cols[0]
                     X = df_pred[feature_cols]
-                    # Try raw prediction first; fall back to label-encoded if model needs numerics
                     try:
                         preds = clf.predict(X)
                     except Exception:
+                        from sklearn.preprocessing import LabelEncoder
                         X_enc = X.copy()
                         le = LabelEncoder()
                         for col in X_enc.select_dtypes(include=["object", "category"]).columns:
@@ -145,30 +111,20 @@ async def analyze_bias_cartography(
             except Exception as e:
                 logger.warning(f"[{audit_id}] HuggingFace model predictions failed: {e} — falling back to dataset labels")
 
-        elif model_type in ("llm_hf", "openai", "gemini_llm") and api_endpoint:
+        elif model_type in ("openai", "gemini_llm") and api_endpoint:
             try:
                 from app.services.model_adapter import FairLensAdapter
-                if model_type == "llm_hf":
-                    adapter = FairLensAdapter.from_generative_huggingface(api_endpoint, hf_token=hf_token)
-                elif model_type == "openai":
-                    adapter = FairLensAdapter.from_openai(model_name=api_endpoint, api_key=llm_api_key)
-                else:
-                    adapter = FairLensAdapter.from_gemini(model_name=api_endpoint, api_key=llm_api_key)
-
+                adapter = (
+                    FairLensAdapter.from_openai(model_name=api_endpoint, api_key=llm_api_key)
+                    if model_type == "openai"
+                    else FairLensAdapter.from_gemini(model_name=api_endpoint, api_key=llm_api_key)
+                )
                 df_pred = pd.read_csv(io.StringIO(dataset_csv))
                 feature_cols_pred = [c for c in df_pred.columns if c != target]
-                # Sample at most 100 rows — LLM calls are slow; bias patterns
-                # are detectable on a representative sample.
-                sample_df = df_pred[feature_cols_pred].sample(
-                    min(100, len(df_pred)), random_state=42
-                ).reset_index(drop=True)
-                preds_sample = adapter.predict(sample_df)
-
-                # Align sampled predictions back to full dataframe index
+                # Sample LLM calls — slow; bias patterns visible on a subset
+                sample_idx = df_pred[feature_cols_pred].sample(min(100, len(df_pred)), random_state=42).index.tolist()
+                preds_sample = adapter.predict(df_pred.loc[sample_idx, feature_cols_pred].reset_index(drop=True))
                 full_preds = np.full(len(df_pred), 0.5)
-                sample_idx = df_pred[feature_cols_pred].sample(
-                    min(100, len(df_pred)), random_state=42
-                ).index.tolist()
                 for i, idx in enumerate(sample_idx):
                     full_preds[idx] = preds_sample[i]
                 model_predictions = [int(round(p)) for p in full_preds]
