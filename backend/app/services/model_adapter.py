@@ -482,19 +482,24 @@ class GenerativeLLMAdapter(BaseModelAdapter):
         headers = {"Content-Type": "application/json"}
         if self.hf_token:
             headers["Authorization"] = f"Bearer {self.hf_token}"
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": self.max_new_tokens,
-                "return_full_text": False,
-                "temperature": 0.01,
-            },
-        }
+
         primary_url = self._HF_INFERENCE_URL.format(model=self.model_name)
         fallback_url = self._HF_LEGACY_URL.format(model=self.model_name)
-        resp = requests.post(primary_url, json=payload, headers=headers, timeout=30)
-        if resp.status_code == 404:
-            resp = requests.post(fallback_url, json=payload, headers=headers, timeout=30)
+
+        # Try with do_sample=False first (greedy, no temperature needed)
+        # then fall back to a minimal payload if the model rejects extra params
+        for payload in [
+            {"inputs": prompt, "parameters": {"max_new_tokens": self.max_new_tokens, "return_full_text": False, "do_sample": False}},
+            {"inputs": prompt, "parameters": {"max_new_tokens": self.max_new_tokens, "return_full_text": False}},
+            {"inputs": prompt},
+        ]:
+            resp = requests.post(primary_url, json=payload, headers=headers, timeout=30)
+            if resp.status_code == 404:
+                resp = requests.post(fallback_url, json=payload, headers=headers, timeout=30)
+            if resp.status_code == 400:
+                continue  # try simpler payload
+            break  # success or non-400 error — stop trying
+
         if resp.status_code == 503:
             raise RuntimeError(
                 f"HuggingFace model '{self.model_name}' is loading — wait ~20s and retry."
@@ -504,11 +509,19 @@ class GenerativeLLMAdapter(BaseModelAdapter):
                 f"HuggingFace model '{self.model_name}' requires authentication. "
                 "Enter your HF token in the 'HuggingFace Token' field."
             )
-        if resp.status_code in (400, 404):
+        if resp.status_code == 404:
             raise ValueError(
-                f"Model '{self.model_name}' is not a generative/text-generation model "
-                f"(HTTP {resp.status_code}). Select 'HuggingFace Classifier' instead of "
-                "'HuggingFace Generative LLM'."
+                f"Model '{self.model_name}' not found on HuggingFace Inference API. "
+                "Check the model ID at huggingface.co."
+            )
+        if resp.status_code == 400:
+            detail = ""
+            try:
+                detail = resp.json().get("error", "")
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"HuggingFace model '{self.model_name}' rejected the request: {detail or resp.text[:200]}"
             )
         resp.raise_for_status()
         data = resp.json()
