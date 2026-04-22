@@ -18,10 +18,6 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_API_KEY: str = ""  # optional — Vertex AI ADC is used by default
 
-    # Direct Gemini API key (for local dev — no GCP needed)
-    # Get a free key at https://aistudio.google.com/apikey
-    GEMINI_API_KEY: str = ""
-
     # Red-team agent
     REDTEAM_MAX_ITERATIONS: int = 3
     REDTEAM_BATCH_SIZE: int = 100

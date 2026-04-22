@@ -4,7 +4,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 import * as d3 from 'd3'
 import ReactMarkdown from 'react-markdown'
 import { useAuditStore } from '../hooks/useAuditStore'
-import { exportPdfReport } from '../utils/api'
 
 // ── Bias Map (D3 scatter) ─────────────────────────────────────────────────
 function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
@@ -85,94 +84,6 @@ function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
   )
 }
 
-// ── CI Error Bar Chart (D3) ───────────────────────────────────────────────
-function CIChart({ ciData }: { ciData: Record<string, Record<string, any>> }) {
-  const ref = useRef<SVGSVGElement>(null)
-
-  useEffect(() => {
-    if (!ref.current) return
-    const allGroups: { col: string; val: string; mean: number; lower: number; upper: number }[] = []
-    Object.entries(ciData).forEach(([col, vals]) => {
-      Object.entries(vals).forEach(([val, stats]: [string, any]) => {
-        allGroups.push({ col, val, mean: stats.spd_mean, lower: stats.spd_lower, upper: stats.spd_upper })
-      })
-    })
-    if (!allGroups.length) return
-
-    const svg = d3.select(ref.current)
-    svg.selectAll('*').remove()
-
-    const W = ref.current.clientWidth || 460
-    const H = 220
-    const margin = { top: 16, right: 20, bottom: 48, left: 52 }
-    const w = W - margin.left - margin.right
-    const h = H - margin.top - margin.bottom
-
-    const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`)
-
-    const labels = allGroups.map(d => d.val)
-    const xScale = d3.scaleBand().domain(labels).range([0, w]).padding(0.4)
-    const yExtent = [
-      Math.min(-0.01, d3.min(allGroups, (d: any) => d.lower) as number) * 1.2,
-      Math.max(0.01,  d3.max(allGroups, (d: any) => d.upper) as number) * 1.2,
-    ]
-    const yScale = d3.scaleLinear().domain(yExtent).range([h, 0])
-
-    // Zero line
-    g.append('line').attr('x1', 0).attr('x2', w).attr('y1', yScale(0)).attr('y2', yScale(0))
-      .attr('stroke', 'rgba(255,255,255,0.15)').attr('stroke-dasharray', '4 3')
-
-    // Axes
-    g.append('g').attr('transform', `translate(0,${h})`)
-      .call(d3.axisBottom(xScale).tickSize(0))
-      .selectAll('text').attr('fill', '#ffffff55').attr('font-size', 9).attr('font-family', 'JetBrains Mono, monospace')
-      .attr('transform', 'rotate(-30)').attr('text-anchor', 'end').attr('dy', '0.8em')
-    g.append('g').call(d3.axisLeft(yScale).ticks(5).tickFormat((d: any) => `${(+d * 100).toFixed(0)}%`))
-      .selectAll('text').attr('fill', '#ffffff55').attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace')
-    g.select('.domain').remove()
-
-    // Bars
-    g.selectAll('rect.bar')
-      .data(allGroups).join('rect').attr('class', 'bar')
-      .attr('x', d => xScale(d.val)!)
-      .attr('width', xScale.bandwidth())
-      .attr('y', d => d.mean >= 0 ? yScale(d.mean) : yScale(0))
-      .attr('height', d => Math.abs(yScale(d.mean) - yScale(0)))
-      .attr('fill', d => Math.abs(d.mean) > 0.1 ? '#ef4444' : Math.abs(d.mean) > 0.05 ? '#eab308' : '#22c55e')
-      .attr('opacity', 0.7).attr('rx', 2)
-
-    // Error whiskers
-    const whiskerX = (d: typeof allGroups[0]) => (xScale(d.val) ?? 0) + xScale.bandwidth() / 2
-    g.selectAll('line.whisker-v')
-      .data(allGroups).join('line').attr('class', 'whisker-v')
-      .attr('x1', whiskerX).attr('x2', whiskerX)
-      .attr('y1', d => yScale(d.upper)).attr('y2', d => yScale(d.lower))
-      .attr('stroke', '#ffffff99').attr('stroke-width', 1.5)
-    g.selectAll('line.whisker-top')
-      .data(allGroups).join('line').attr('class', 'whisker-top')
-      .attr('x1', d => whiskerX(d) - 4).attr('x2', d => whiskerX(d) + 4)
-      .attr('y1', d => yScale(d.upper)).attr('y2', d => yScale(d.upper))
-      .attr('stroke', '#ffffff99').attr('stroke-width', 1.5)
-    g.selectAll('line.whisker-bot')
-      .data(allGroups).join('line').attr('class', 'whisker-bot')
-      .attr('x1', d => whiskerX(d) - 4).attr('x2', d => whiskerX(d) + 4)
-      .attr('y1', d => yScale(d.lower)).attr('y2', d => yScale(d.lower))
-      .attr('stroke', '#ffffff99').attr('stroke-width', 1.5)
-
-    // Y label
-    svg.append('text').attr('transform', 'rotate(-90)')
-      .attr('x', -(H / 2)).attr('y', 13)
-      .attr('text-anchor', 'middle').attr('fill', '#ffffff33')
-      .attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace')
-      .text('Statistical Parity Diff (95% CI)')
-  }, [ciData])
-
-  return (
-    <svg ref={ref} width="100%" height={220}
-      className="rounded-xl" style={{ background: 'rgba(255,255,255,0.02)' }} />
-  )
-}
-
 // ── Proxy Graph (D3 force) ────────────────────────────────────────────────
 function ProxyGraph({ graph, chains }: { graph: any; chains: any[] }) {
   const ref = useRef<SVGSVGElement>(null)
@@ -230,103 +141,6 @@ function ProxyGraph({ graph, chains }: { graph: any; chains: any[] }) {
   )
 }
 
-// ── FairScore Gauge ───────────────────────────────────────────────────────
-function FairScoreGauge({ score, label, color }: { score: number; label: string; color: string }) {
-  const [displayed, setDisplayed] = useState(0)
-
-  useEffect(() => {
-    let start = 0
-    const step = Math.ceil(score / 40)
-    const timer = setInterval(() => {
-      start += step
-      if (start >= score) { setDisplayed(score); clearInterval(timer) }
-      else setDisplayed(start)
-    }, 30)
-    return () => clearInterval(timer)
-  }, [score])
-
-  const radius = 54
-  const circumference = 2 * Math.PI * radius
-  const dashOffset = circumference - (displayed / 100) * circumference
-
-  const strokeColor = color === 'green' ? '#22c55e' : color === 'yellow' ? '#eab308' : '#ef4444'
-  const glowColor   = color === 'green' ? '#22c55e44' : color === 'yellow' ? '#eab30844' : '#ef444444'
-  const textColor   = color === 'green' ? 'text-green-400' : color === 'yellow' ? 'text-yellow-400' : 'text-red-400'
-
-  return (
-    <div className="glass rounded-2xl p-6 border border-white/5 flex flex-col items-center justify-center">
-      <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-4">FairScore™</div>
-      <div className="relative" style={{ filter: `drop-shadow(0 0 12px ${glowColor})` }}>
-        <svg width={140} height={140} viewBox="0 0 140 140">
-          <circle cx={70} cy={70} r={radius} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={10} />
-          <circle
-            cx={70} cy={70} r={radius} fill="none"
-            stroke={strokeColor} strokeWidth={10}
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            strokeDashoffset={dashOffset}
-            transform="rotate(-90 70 70)"
-            style={{ transition: 'stroke-dashoffset 0.03s linear' }}
-          />
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className={`font-display font-bold text-3xl ${textColor}`}>{displayed}</span>
-          <span className="text-white/30 text-xs font-mono">/100</span>
-        </div>
-      </div>
-      <div className={`font-mono text-sm font-semibold mt-3 ${textColor}`}>{label}</div>
-      <div className="text-white/25 text-xs mt-1">
-        {color === 'green' ? 'Model meets fairness standards' :
-         color === 'yellow' ? 'Some bias patterns detected' :
-         'Significant bias — action required'}
-      </div>
-    </div>
-  )
-}
-
-// ── Compliance Badges ─────────────────────────────────────────────────────
-function ComplianceBadges({ tags }: { tags: any[] }) {
-  if (!tags?.length) return null
-  return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
-      className="glass rounded-2xl p-5 border border-white/5 mb-6">
-      <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-4">Regulatory Compliance</div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {tags.map((tag: any) => {
-          const isPass = tag.status === 'PASS'
-          const isFail = tag.status === 'FAIL'
-          return (
-            <div key={tag.id}
-              className={`relative group rounded-xl p-3 border transition-all
-                ${isPass
-                  ? 'border-green-500/20 bg-green-500/5'
-                  : isFail
-                  ? 'border-red-500/20 bg-red-500/5'
-                  : 'border-yellow-500/20 bg-yellow-500/5'}`}>
-              <div className="flex items-center gap-1.5 mb-1">
-                <span className={`text-sm ${isPass ? 'text-green-400' : isFail ? 'text-red-400' : 'text-yellow-400'}`}>
-                  {isPass ? '✓' : isFail ? '✗' : '⚠'}
-                </span>
-                <span className={`text-xs font-mono font-semibold ${isPass ? 'text-green-300' : isFail ? 'text-red-300' : 'text-yellow-300'}`}>
-                  {tag.status}
-                </span>
-              </div>
-              <div className="text-white/70 text-xs font-mono leading-tight">{tag.label}</div>
-              <div className="text-white/30 text-xs mt-0.5">{tag.domain}</div>
-              {tag.violations?.length > 0 && (
-                <div className="absolute bottom-full left-0 mb-2 w-64 hidden group-hover:block z-10
-                  bg-gray-900 border border-white/10 rounded-xl p-3 shadow-xl text-xs text-white/60 font-mono leading-relaxed">
-                  {tag.violations.map((v: string, i: number) => <div key={i}>{v}</div>)}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </motion.div>
-  )
-}
-
 // ── Severity badge ────────────────────────────────────────────────────────
 function SeverityBadge({ level }: { level: string }) {
   const map: Record<string, string> = {
@@ -348,19 +162,6 @@ export default function ResultsPage() {
   const store = useAuditStore()
   const [activeTab, setActiveTab] = useState<'cartography' | 'constitution' | 'proxy'>('cartography')
   const [selectedBiases, setSelectedBiases] = useState<Set<string>>(new Set())
-  const [downloading, setDownloading] = useState(false)
-
-  const downloadReport = async () => {
-    if (!store.cartographyResults) return
-    setDownloading(true)
-    try {
-      await exportPdfReport(store.cartographyResults)
-    } catch (e: any) {
-      alert(`PDF export failed: ${e.message}`)
-    } finally {
-      setDownloading(false)
-    }
-  }
 
   const carto = store.cartographyResults
   const constitution = store.constitutionResults
@@ -422,52 +223,14 @@ export default function ResultsPage() {
             <div className="text-xs font-mono text-lens-light mb-1">Audit Complete — Review Findings</div>
             <h1 className="font-display font-bold text-white text-3xl">Bias Analysis Report</h1>
           </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={downloadReport}
-              disabled={downloading}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-mono font-semibold border transition-all
-                ${downloading
-                  ? 'border-white/10 text-white/20 cursor-not-allowed'
-                  : 'border-lens/40 text-lens-light hover:bg-lens/10 cursor-pointer'}`}>
-              {downloading ? '⏳ Generating…' : '⬇ Download Report'}
-            </button>
-            <div className="text-xs font-mono text-white/30 glass rounded-xl px-4 py-2 border border-white/5">
-              Audit ID: {carto?.audit_id}
-            </div>
+          <div className="text-xs font-mono text-white/30 glass rounded-xl px-4 py-2 border border-white/5">
+            Audit ID: {carto?.audit_id}
           </div>
         </div>
       </motion.div>
 
-      {/* FairScore + Summary cards */}
-      {carto?.fair_score && (
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}
-          className="mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <FairScoreGauge
-              score={carto.fair_score.score}
-              label={carto.fair_score.label}
-              color={carto.fair_score.color}
-            />
-            <div className="md:col-span-3 grid grid-cols-2 md:grid-cols-2 gap-3 content-start">
-              {[
-                { label: 'Samples Analysed', value: carto?.summary?.total_samples?.toLocaleString(), color: 'text-white' },
-                { label: 'Bias Hotspots', value: carto?.summary?.hotspot_count, color: 'text-signal-red' },
-                { label: 'Decision Flips', value: constitution?.summary?.decision_flips, color: 'text-signal-amber' },
-                { label: 'High-Risk Proxies', value: highRiskProxies || proxy?.summary?.critical_proxies, color: 'text-lens-light' },
-              ].map((card, i) => (
-                <div key={i} className="glass rounded-2xl p-4 border border-white/5">
-                  <div className="text-white/30 text-xs font-mono mb-1">{card.label}</div>
-                  <div className={`font-display font-bold text-2xl ${card.color}`}>{card.value ?? '—'}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </motion.div>
-      )}
-
-      {/* Summary cards (fallback when no fair_score) */}
-      {!carto?.fair_score && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}
+      {/* Summary cards */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}
         className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         {[
           { label: 'Samples Analysed', value: carto?.summary?.total_samples?.toLocaleString(), color: 'text-white' },
@@ -480,12 +243,7 @@ export default function ResultsPage() {
             <div className={`font-display font-bold text-2xl ${card.color}`}>{card.value ?? '—'}</div>
           </div>
         ))}
-      </motion.div>}
-
-      {/* Compliance badges */}
-      {carto?.compliance_tags?.length > 0 && (
-        <ComplianceBadges tags={carto.compliance_tags} />
-      )}
+      </motion.div>
 
       {/* Tab navigation */}
       <div className="flex gap-2 mb-6">
@@ -509,41 +267,28 @@ export default function ResultsPage() {
           className="mb-10">
 
           {activeTab === 'cartography' && (
-            <div className="space-y-4">
-              <div className="grid md:grid-cols-3 gap-6">
-                <div className="md:col-span-2 glass rounded-2xl p-5 border border-white/5">
-                  <h3 className="font-display font-semibold text-white text-sm mb-1">Bias Topology Map</h3>
-                  <p className="text-white/30 text-xs mb-4 font-mono">
-                    Each point is a model prediction. Colour = bias magnitude. Red circles = hotspot clusters.
-                  </p>
-                  <BiasMap points={carto?.map_points || []} hotspots={carto?.hotspots || []} />
-                </div>
-                <div className="glass rounded-2xl p-5 border border-white/5 overflow-y-auto max-h-[400px]">
-                  <h3 className="font-display font-semibold text-white text-sm mb-4">Hotspots</h3>
-                  {carto?.hotspots?.map((h: any, i: number) => (
-                    <div key={i} className="border-b border-white/5 pb-3 mb-3 last:border-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-white/70 text-xs font-mono">{h.dominant_slice}</span>
-                        <SeverityBadge level={h.severity} />
-                      </div>
-                      <div className="text-white/30 text-xs">
-                        {h.size} samples · bias score {h.mean_bias_magnitude?.toFixed(3)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+            <div className="grid md:grid-cols-3 gap-6">
+              <div className="md:col-span-2 glass rounded-2xl p-5 border border-white/5">
+                <h3 className="font-display font-semibold text-white text-sm mb-1">Bias Topology Map</h3>
+                <p className="text-white/30 text-xs mb-4 font-mono">
+                  Each point is a model prediction. Colour = bias magnitude. Red circles = hotspot clusters.
+                </p>
+                <BiasMap points={carto?.map_points || []} hotspots={carto?.hotspots || []} />
               </div>
-              {Object.keys(carto?.metric_confidence_intervals || {}).length > 0 && (
-                <div className="glass rounded-2xl p-5 border border-white/5">
-                  <h3 className="font-display font-semibold text-white text-sm mb-1">
-                    Statistical Parity Difference — 95% Bootstrap Confidence Intervals
-                  </h3>
-                  <p className="text-white/30 text-xs mb-4 font-mono">
-                    Bars show SPD per group. Whiskers show 95% CI from 200 bootstrap resamples. Bars above 0 = over-represented; below = under-represented.
-                  </p>
-                  <CIChart ciData={carto.metric_confidence_intervals} />
-                </div>
-              )}
+              <div className="glass rounded-2xl p-5 border border-white/5 overflow-y-auto max-h-[400px]">
+                <h3 className="font-display font-semibold text-white text-sm mb-4">Hotspots</h3>
+                {carto?.hotspots?.map((h: any, i: number) => (
+                  <div key={i} className="border-b border-white/5 pb-3 mb-3 last:border-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-white/70 text-xs font-mono">{h.dominant_slice}</span>
+                      <SeverityBadge level={h.severity} />
+                    </div>
+                    <div className="text-white/30 text-xs">
+                      {h.size} samples · bias score {h.mean_bias_magnitude?.toFixed(3)}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

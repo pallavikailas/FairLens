@@ -17,7 +17,7 @@ except Exception:
 
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.api import cartography, constitution, proxy_hunter, redteam, health, reports
+from app.api import cartography, constitution, proxy_hunter, redteam, health
 
 setup_logging()
 
@@ -43,7 +43,6 @@ app.include_router(cartography.router, prefix="/api/v1/cartography", tags=["bias
 app.include_router(constitution.router, prefix="/api/v1/constitution", tags=["counterfactual-constitution"])
 app.include_router(proxy_hunter.router, prefix="/api/v1/proxy", tags=["proxy-variable-hunter"])
 app.include_router(redteam.router, prefix="/api/v1/redteam", tags=["fairness-redteam"])
-app.include_router(reports.router, prefix="/api/v1/reports", tags=["compliance-reports"])
 
 
 @app.get("/")

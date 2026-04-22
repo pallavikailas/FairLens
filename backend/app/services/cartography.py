@@ -42,13 +42,6 @@ class BiasCartographyService:
         gemini_analysis = await self._gemini_analyse(sample_df, protected_cols, target_col, slice_metrics, audit_id, model_predictions is not None)
         map_points = self._generate_map_points(df, protected_cols, target_col, slice_metrics, model_predictions)
         hotspots = self._identify_hotspots(slice_metrics)
-        fair_score = self.compute_fair_score(slice_metrics)
-
-        # Bootstrap CI for first protected column (representative, fast)
-        ci_data: Dict[str, Any] = {}
-        present_cols = [c for c in protected_cols if c in df.columns]
-        if present_cols:
-            ci_data = self.bootstrap_metric_ci(df, model_predictions, present_cols[0], target_col)
 
         return {
             "audit_id": audit_id,
@@ -56,8 +49,6 @@ class BiasCartographyService:
             "hotspots": hotspots,
             "slice_metrics": slice_metrics,
             "gemini_analysis": gemini_analysis,
-            "fair_score": fair_score,
-            "metric_confidence_intervals": {present_cols[0]: ci_data} if ci_data else {},
             "summary": {
                 "total_samples": len(df),
                 "hotspot_count": len(hotspots),
@@ -169,78 +160,6 @@ Return ONLY this JSON:
             }
             for i, m in enumerate([m for m in slice_metrics if m.get("flagged")][:8])
         ]
-
-    def compute_fair_score(self, slice_metrics: list) -> dict:
-        """Composite fairness score 0–100. Higher = fairer."""
-        if not slice_metrics:
-            return {"score": 100, "label": "Fair", "color": "green"}
-
-        single = [m for m in slice_metrics if "∩" not in m["label"]]
-        avg_spd = float(np.mean([abs(m["statistical_parity_diff"]) for m in single])) if single else 0.0
-        avg_di_penalty = float(np.mean([
-            max(0, settings.DISPARATE_IMPACT_THRESHOLD - m["disparate_impact"])
-            for m in single
-        ])) if single else 0.0
-        flagged_ratio = sum(1 for m in single if m.get("flagged")) / max(len(single), 1)
-
-        raw = 100 - (avg_spd * 200) - (avg_di_penalty * 100) - (flagged_ratio * 20)
-        score = int(max(0, min(100, round(raw))))
-
-        if score >= 80:
-            label, color = "Fair", "green"
-        elif score >= 60:
-            label, color = "Caution", "yellow"
-        else:
-            label, color = "Biased", "red"
-
-        return {"score": score, "label": label, "color": color}
-
-    def bootstrap_metric_ci(
-        self,
-        df: "pd.DataFrame",
-        predictions,
-        protected_col: str,
-        target_col: str,
-        n_bootstrap: int = 200,
-        ci: float = 0.95,
-    ) -> dict:
-        """Bootstrap confidence intervals for SPD per protected attribute value."""
-        import pandas as pd
-        if protected_col not in df.columns:
-            return {}
-
-        if predictions is not None and len(predictions) == len(df):
-            target = pd.Series(predictions, index=df.index, dtype=float)
-        elif target_col in df.columns:
-            target = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
-        else:
-            return {}
-
-        overall_rate = float(target.mean())
-        if overall_rate == 0:
-            return {}
-
-        alpha = (1 - ci) / 2
-        results = {}
-        rng = np.random.default_rng(42)
-
-        for val in df[protected_col].dropna().unique():
-            mask = (df[protected_col] == val).values
-            if mask.sum() < 10:
-                continue
-            group_target = target.values[mask]
-            boots = []
-            for _ in range(n_bootstrap):
-                idx = rng.choice(len(group_target), size=len(group_target), replace=True)
-                sample_rate = group_target[idx].mean()
-                boots.append(float(sample_rate - overall_rate))
-            boots_arr = np.array(boots)
-            results[str(val)] = {
-                "spd_mean": round(float(boots_arr.mean()), 4),
-                "spd_lower": round(float(np.quantile(boots_arr, alpha)), 4),
-                "spd_upper": round(float(np.quantile(boots_arr, 1 - alpha)), 4),
-            }
-        return results
 
 
 cartography_service = BiasCartographyService()

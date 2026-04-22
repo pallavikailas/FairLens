@@ -1,57 +1,51 @@
 """
-Gemini client — supports two modes:
-  1. Local dev: GEMINI_API_KEY in .env → uses google-generativeai directly (no GCP needed)
-  2. Cloud Run:  no key needed → uses Vertex AI with service account ADC
+Gemini client via Vertex AI (google-cloud-aiplatform).
+
+Authentication:
+  - Local dev:  run `gcloud auth application-default login`
+  - Cloud Run:  service account with roles/aiplatform.user (auto-injected)
+
+No API key required — uses Google Application Default Credentials.
 """
 import asyncio
 import logging
 import json
 import re
 
+import vertexai
+from vertexai.generative_models import GenerativeModel, GenerationConfig
+from google.api_core.exceptions import GoogleAPIError
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+vertexai.init(
+    project=settings.GOOGLE_CLOUD_PROJECT,
+    location=settings.VERTEX_AI_LOCATION,
+)
 
-def _make_model():
-    """Return a Gemini model using whichever auth is available."""
-    if settings.GEMINI_API_KEY:
-        import google.generativeai as genai
-        from google.generativeai import GenerationConfig as GC
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        return genai.GenerativeModel(
-            settings.GEMINI_MODEL,
-            generation_config=GC(temperature=0.2, max_output_tokens=8192),
-        ), "genai"
-    else:
-        import vertexai
-        from vertexai.generative_models import GenerativeModel, GenerationConfig
-        vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.VERTEX_AI_LOCATION)
-        return GenerativeModel(
-            settings.GEMINI_MODEL,
-            generation_config=GenerationConfig(temperature=0.2, max_output_tokens=8192),
-        ), "vertexai"
+_generation_config = GenerationConfig(temperature=0.2, max_output_tokens=8192)
 
 
 async def ask_gemini(prompt: str, expect_json: bool = False) -> str:
+    """Send a prompt to Gemini 2.5 Flash via Vertex AI and return the text."""
     try:
-        model, mode = _make_model()
-
-        if mode == "genai":
-            loop = asyncio.get_event_loop()
-            response = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: model.generate_content(prompt)),
-                timeout=55.0,
-            )
-        else:
-            response = await asyncio.wait_for(
-                model.generate_content_async(prompt),
-                timeout=55.0,
-            )
-
+        model = GenerativeModel(
+            settings.GEMINI_MODEL,
+            generation_config=_generation_config,
+        )
+        response = await asyncio.wait_for(
+            model.generate_content_async(prompt),
+            timeout=55.0,
+        )
         text = response.text
     except asyncio.TimeoutError:
+        logger.error("Gemini timed out after 55 seconds")
         raise RuntimeError("Gemini timed out after 55 seconds")
+    except GoogleAPIError as e:
+        logger.error(f"Gemini API error: {e}")
+        raise
     except Exception as e:
         logger.error(f"Gemini error: {e}")
         raise
@@ -64,6 +58,7 @@ async def ask_gemini(prompt: str, expect_json: bool = False) -> str:
 
 
 async def ask_gemini_json(prompt: str) -> dict:
+    """Ask Gemini and parse the response as JSON."""
     text = await ask_gemini(prompt, expect_json=True)
     try:
         return json.loads(text)

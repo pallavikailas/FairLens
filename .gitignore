@@ -86,7 +86,3 @@ logs/
 .DS_Store
 .AppleDouble
 .LSOverride
-
-# Local venv
-ai/
-backend/ai/

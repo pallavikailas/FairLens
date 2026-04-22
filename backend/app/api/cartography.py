@@ -14,7 +14,6 @@ from sklearn.preprocessing import LabelEncoder
 from app.services.cartography import cartography_service
 from app.services.auto_detect import auto_detect_columns
 from app.services.dataset_loader import load_dataset_csv
-from app.services.compliance_mapper import check_compliance
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +201,6 @@ async def analyze_bias_cartography(
         result["model_type"] = model_type
         result["dataset_source"] = dataset_source
         result["analysis_source"] = "model_predictions" if model_predictions else "dataset_labels"
-        result["compliance_tags"] = check_compliance(result.get("slice_metrics", []))
 
         return JSONResponse(content=result)
 
