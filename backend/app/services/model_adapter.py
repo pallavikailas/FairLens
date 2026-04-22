@@ -520,8 +520,15 @@ class GenerativeLLMAdapter(BaseModelAdapter):
                 detail = resp.json().get("error", "")
             except Exception:
                 pass
+            msg = detail or resp.text[:200]
+            if any(kw in msg.lower() for kw in ("not supported", "unsupported", "not available")):
+                raise ValueError(
+                    f"HuggingFace model '{self.model_name}' is not supported by the HF Inference API. "
+                    "The model may require a Pro subscription or is not in the free tier. "
+                    "Try: google/flan-t5-base, tiiuae/falcon-7b-instruct, or a text-classification model."
+                )
             raise RuntimeError(
-                f"HuggingFace model '{self.model_name}' rejected the request: {detail or resp.text[:200]}"
+                f"HuggingFace model '{self.model_name}' rejected the request: {msg}"
             )
         resp.raise_for_status()
         data = resp.json()

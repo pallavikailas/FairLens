@@ -406,9 +406,21 @@ export default function ResultsPage() {
 
   const highRiskProxies = (proxy?.summary?.critical_proxies ?? 0) + (proxy?.summary?.high_proxies ?? 0)
 
+  // Adjust FairScore to account for proxy chain risk (cartography score only sees model outputs)
+  const adjustedFairScore = (() => {
+    if (!carto?.fair_score) return null
+    let score = carto.fair_score.score
+    score -= (proxy?.summary?.critical_proxies ?? 0) * 10
+    score -= (proxy?.summary?.high_proxies ?? 0) * 5
+    score = Math.max(0, Math.min(100, score))
+    const label = score >= 80 ? 'Fair' : score >= 60 ? 'Caution' : 'Biased'
+    const color = score >= 80 ? 'green' : score >= 60 ? 'yellow' : 'red'
+    return { score, label, color }
+  })()
+
   const TABS = [
-    { key: 'cartography', label: 'Bias Map', count: carto?.hotspots?.length },
-    { key: 'constitution', label: 'Constitution', count: constitution?.summary?.decision_flips },
+    { key: 'cartography', label: 'Bias Map', count: carto?.slice_metrics?.filter((m: any) => m.flagged)?.length ?? carto?.hotspots?.length ?? 0 },
+    { key: 'constitution', label: 'Constitution', count: constitution?.patterns?.length ?? constitution?.summary?.decision_flips ?? 0 },
     { key: 'proxy', label: 'Proxy Chains', count: highRiskProxies },
   ]
 
@@ -440,14 +452,14 @@ export default function ResultsPage() {
       </motion.div>
 
       {/* FairScore + Summary cards */}
-      {carto?.fair_score && (
+      {adjustedFairScore && (
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}
           className="mb-6">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <FairScoreGauge
-              score={carto.fair_score.score}
-              label={carto.fair_score.label}
-              color={carto.fair_score.color}
+              score={adjustedFairScore.score}
+              label={adjustedFairScore.label}
+              color={adjustedFairScore.color}
             />
             <div className="md:col-span-3 grid grid-cols-2 md:grid-cols-2 gap-3 content-start">
               {[
