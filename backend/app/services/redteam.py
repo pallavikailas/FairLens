@@ -273,6 +273,17 @@ class FairnessRedTeamAgent:
         disparity_summary = ", ".join(f"{e['attribute']}={e['disparity']:.3f}" for e in evaluation)
         log.append(f"[Evaluator Agent] Bias confirmed in {n_confirmed}/{len(evaluation)} attributes "
                    f"(disparities: {disparity_summary})")
+
+        # Detect degenerate model output — all predictions identical means model can't process tabular data
+        if evaluation and all(e["disparity"] == 0.0 for e in evaluation):
+            all_probs = [r["probability"] for r in results if r.get("probability") is not None]
+            if all_probs and len(set(round(p, 3) for p in all_probs)) == 1:
+                log.append(
+                    "[Evaluator Agent] WARNING: Model produces uniform predictions (all probabilities identical). "
+                    "This typically means a generative LLM cannot interpret the tabular row format as a YES/NO "
+                    "decision task. Bias cannot be measured. Try a text-classification model instead."
+                )
+
         return {**state, "evaluation_results": evaluation, "log": log}
 
     def _decide_patch_node(self, state: Dict) -> Dict:

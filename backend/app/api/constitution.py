@@ -187,6 +187,8 @@ async def generate_constitution(
         if model is not None:
             try:
                 y_pred = model.predict(X)
+            except ValueError:
+                raise  # auth errors, 404s — surface to outer handler as 400
             except Exception:
                 # Fallback: label-encode categorical columns (needed for XGBoost/LightGBM)
                 try:
@@ -198,6 +200,8 @@ async def generate_constitution(
                         except Exception:
                             X_enc[col] = 0
                     y_pred = model.predict(X_enc.fillna(0))
+                except ValueError:
+                    raise
                 except Exception as e:
                     raise HTTPException(500, f"Model prediction failed: {e}")
         else:
@@ -228,5 +232,7 @@ async def generate_constitution(
         return JSONResponse(content=result)
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -100,7 +100,7 @@ class BiasCartographyService:
                             spd = round(group_rate - overall_rate, 4)
                             di = round(group_rate / overall_rate, 4) if overall_rate > 0 else 0
                             metrics.append({
-                                "label": f"{c1}={v1} ∩ {c2}={v2}", "attribute": f"{c1}+{c2}",
+                                "label": f"{c1}={v1} \u2229 {c2}={v2}", "attribute": f"{c1}+{c2}",
                                 "value": f"{v1}+{v2}", "size": int(mask.sum()),
                                 "positive_rate": round(group_rate, 4), "overall_rate": round(overall_rate, 4),
                                 "statistical_parity_diff": spd, "disparate_impact": di,
