@@ -285,11 +285,20 @@ class HuggingFaceAdapter(BaseModelAdapter):
         batch_size = 8
         for i in range(0, len(texts), batch_size):
             batch = texts[i: i + batch_size]
-            resp = requests.post(primary_url, json={"inputs": batch}, headers=headers, timeout=30)
+            for attempt in range(3):
+                try:
+                    resp = requests.post(primary_url, json={"inputs": batch}, headers=headers, timeout=90)
+                    break
+                except requests.exceptions.Timeout:
+                    if attempt == 2:
+                        raise RuntimeError(
+                            f"HuggingFace model '{self.model_name}' timed out after 3 attempts. "
+                            "The model may be cold-starting — wait ~30s and retry."
+                        )
 
             # Fall back to legacy URL on 404 (model not on new router yet)
             if resp.status_code == 404 and primary_url != fallback_url:
-                resp = requests.post(fallback_url, json={"inputs": batch}, headers=headers, timeout=30)
+                resp = requests.post(fallback_url, json={"inputs": batch}, headers=headers, timeout=90)
 
             if resp.status_code == 503:
                 raise RuntimeError(
@@ -500,9 +509,15 @@ class GenerativeLLMAdapter(BaseModelAdapter):
             {"inputs": prompt, "parameters": {"max_new_tokens": self.max_new_tokens, "return_full_text": False}},
             {"inputs": prompt},
         ]:
-            resp = requests.post(primary_url, json=payload, headers=headers, timeout=30)
+            try:
+                resp = requests.post(primary_url, json=payload, headers=headers, timeout=90)
+            except requests.exceptions.Timeout:
+                raise RuntimeError(
+                    f"HuggingFace model '{self.model_name}' timed out. "
+                    "The model may be cold-starting — wait ~30s and retry."
+                )
             if resp.status_code == 404:
-                resp = requests.post(fallback_url, json=payload, headers=headers, timeout=30)
+                resp = requests.post(fallback_url, json=payload, headers=headers, timeout=90)
             if resp.status_code == 400:
                 continue  # try simpler payload
             break  # success or non-400 error — stop trying
