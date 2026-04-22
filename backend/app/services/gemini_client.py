@@ -16,9 +16,12 @@ logger = logging.getLogger(__name__)
 def _make_model():
     """Return a Gemini model using whichever auth is available."""
     if settings.GEMINI_API_KEY:
+        import warnings
         import google.generativeai as genai
         from google.generativeai import GenerationConfig as GC
-        genai.configure(api_key=settings.GEMINI_API_KEY)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            genai.configure(api_key=settings.GEMINI_API_KEY)
         return genai.GenerativeModel(
             settings.GEMINI_MODEL,
             generation_config=GC(temperature=0.2, max_output_tokens=8192),

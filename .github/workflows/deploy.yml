@@ -66,7 +66,7 @@ jobs:
             --cpu 2 \
             --concurrency 80 \
             --max-instances 10 \
-            --timeout 300 \
+            --timeout 3600 \
             --set-env-vars "GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }},ENVIRONMENT=production" \
             --quiet
 
