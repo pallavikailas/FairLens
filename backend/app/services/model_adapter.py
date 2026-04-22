@@ -749,6 +749,40 @@ class FairLensAdapter:
         return HuggingFaceAdapter(model_name_or_pipeline, task=task, hf_token=hf_token)
 
     @staticmethod
+    def from_huggingface_auto(
+        model_name: str,
+        hf_token: str = "",
+    ) -> "BaseModelAdapter":
+        """
+        Auto-detect whether model_name is a text-classification or generative model
+        by querying the HuggingFace Hub API, then return the right adapter.
+        """
+        import requests
+        headers = {"Content-Type": "application/json"}
+        if hf_token:
+            headers["Authorization"] = f"Bearer {hf_token}"
+        try:
+            resp = requests.get(
+                f"https://huggingface.co/api/models/{model_name}",
+                headers=headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                pipeline_tag = resp.json().get("pipeline_tag", "")
+            else:
+                pipeline_tag = ""
+        except Exception:
+            pipeline_tag = ""
+
+        GENERATIVE_TASKS = {"text-generation", "text2text-generation", "conversational", "summarization"}
+        if pipeline_tag in GENERATIVE_TASKS:
+            logger.info(f"Auto-detected '{model_name}' as generative ({pipeline_tag}) → GenerativeLLMAdapter")
+            return GenerativeLLMAdapter(backend="huggingface", model_name=model_name, hf_token=hf_token)
+        else:
+            logger.info(f"Auto-detected '{model_name}' as classifier ({pipeline_tag or 'unknown'}) → HuggingFaceAdapter")
+            return HuggingFaceAdapter(model_name, task="text-classification", hf_token=hf_token)
+
+    @staticmethod
     def from_api(
         endpoint: str,
         headers: Optional[dict] = None,

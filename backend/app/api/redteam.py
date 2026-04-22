@@ -70,7 +70,7 @@ async def run_redteam(
 
     elif model_type == "huggingface" and api_endpoint:
         try:
-            model = FairLensAdapter.from_huggingface(api_endpoint, task="text-classification", hf_token=hf_token)
+            model = FairLensAdapter.from_huggingface_auto(api_endpoint, hf_token=hf_token)
         except Exception as e:
             raise HTTPException(400, f"Failed to load HuggingFace model '{api_endpoint}': {e}")
 

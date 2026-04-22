@@ -9,8 +9,7 @@ import { runCartography, runConstitution, runProxyHunter } from '../utils/api'
 const MODEL_TYPES = [
   { id: 'sklearn',     icon: '🧠', label: 'scikit-learn / XGBoost',      desc: 'Upload a .pkl model file' },
   { id: 'api',         icon: '🌐', label: 'REST API Endpoint',            desc: 'Any model behind an HTTP URL' },
-  { id: 'huggingface', icon: '🤗', label: 'HuggingFace Classifier',       desc: 'Text-classification model from HF Hub' },
-  { id: 'llm_hf',      icon: '🦙', label: 'HuggingFace Generative LLM',  desc: 'Gemma, Llama, Mistral, etc.' },
+  { id: 'huggingface', icon: '🤗', label: 'HuggingFace',                  desc: 'Any model from HF Hub — auto-detected' },
   { id: 'openai',      icon: '🔮', label: 'OpenAI (ChatGPT / GPT-4)',     desc: 'gpt-4o, gpt-4, gpt-3.5-turbo' },
   { id: 'gemini_llm',  icon: '✦',  label: 'Gemini LLM',                  desc: 'gemini-2.0-flash, gemini-1.5-pro' },
   { id: 'vertex_ai',   icon: '☁',  label: 'Vertex AI Endpoint',           desc: 'Google Cloud deployed model' },
@@ -75,7 +74,6 @@ export default function AuditPage() {
   const [datasetSource, setDatasetSource] = useState<DatasetSource>('upload')
   const [apiEndpoint, setApiEndpoint] = useState('')
   const [hfModel, setHfModel] = useState('')
-  const [llmHfModel, setLlmHfModel] = useState('')
   const [hfToken, setHfToken] = useState('')
   const [openaiModel, setOpenaiModel] = useState('gpt-4o')
   const [openaiKey, setOpenaiKey] = useState('')
@@ -119,7 +117,6 @@ export default function AuditPage() {
       // Resolve model identifier and credentials for the selected model type
       const modelEndpoint =
         modelType === 'huggingface' ? hfModel :
-        modelType === 'llm_hf'     ? llmHfModel :
         modelType === 'openai'     ? openaiModel :
         modelType === 'gemini_llm' ? geminiModel :
         apiEndpoint
@@ -291,23 +288,15 @@ export default function AuditPage() {
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
             )}
             {modelType === 'huggingface' && (
-              <div>
-                <input value={hfModel} onChange={e => setHfModel(e.target.value)}
-                  placeholder="e.g. distilbert-base-uncased-finetuned-sst-2-english"
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
-                <p className="text-white/25 text-xs mt-2">Your dataset must have a <span className="text-lens-light font-mono">text</span> column for HuggingFace models.</p>
-              </div>
-            )}
-            {modelType === 'llm_hf' && (
               <div className="space-y-3">
-                <input value={llmHfModel} onChange={e => setLlmHfModel(e.target.value)}
-                  placeholder="e.g. google/gemma-3-1b-it or meta-llama/Llama-3.2-1B-Instruct"
+                <input value={hfModel} onChange={e => setHfModel(e.target.value)}
+                  placeholder="e.g. unitary/toxic-bert or google/gemma-3-1b-it"
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
                 <input value={hfToken} onChange={e => setHfToken(e.target.value)}
-                  placeholder="HuggingFace token (hf_...) — required for gated models"
+                  placeholder="HuggingFace token (hf_...) — required for most models"
                   type="password"
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
-                <p className="text-white/25 text-xs">FairLens uses decision prompts to probe any generative model for bias — no text column needed.</p>
+                <p className="text-white/25 text-xs">Model type (classifier or generative) is auto-detected from the HuggingFace Hub.</p>
               </div>
             )}
             {modelType === 'openai' && (

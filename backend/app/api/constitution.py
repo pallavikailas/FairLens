@@ -94,7 +94,7 @@ async def generate_constitution(
         elif model_type == "huggingface" and api_endpoint:
             try:
                 from app.services.model_adapter import FairLensAdapter
-                model = FairLensAdapter.from_huggingface(api_endpoint, task="text-classification", hf_token=hf_token)
+                model = FairLensAdapter.from_huggingface_auto(api_endpoint, hf_token=hf_token)
                 # HuggingFaceAdapter._to_text auto-serialises tabular rows when no 'text' column present
             except Exception as e:
                 err = str(e)
