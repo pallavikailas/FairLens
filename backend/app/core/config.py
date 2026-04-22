@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     VERTEX_AI_LOCATION: str = "us-central1"
     VERTEX_EMBEDDING_MODEL: str = "text-embedding-004"
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_API_KEY: str = ""  # optional — Vertex AI ADC is used by default
 
     # Red-team agent
     REDTEAM_MAX_ITERATIONS: int = 3
