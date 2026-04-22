@@ -43,6 +43,9 @@ aiohttp==3.9.5
 python-multipart==0.0.9
 aiofiles==23.2.1
 
+# PDF reports
+reportlab==4.2.2
+
 # Testing
 pytest==8.2.2
 pytest-asyncio==0.23.7
