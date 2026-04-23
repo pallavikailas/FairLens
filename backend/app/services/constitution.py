@@ -220,51 +220,59 @@ class CounterfactualConstitutionService:
             else:
                 model_note = ""
 
-        prompt = f"""You are an AI fairness auditor generating a "Counterfactual Constitution" —
-a structured policy document that reveals the IMPLICIT RULES an AI model is following
-with respect to demographic attributes.
+        prompt = f"""You are an AI fairness auditor generating a Counterfactual Constitution — a structured
+document revealing the implicit rules an AI model follows with respect to demographic attributes.
+Write so both a non-technical HR manager and a data scientist can read and act on it.
 
 AUDIT ID: {audit_id}
-PROTECTED ATTRIBUTES ANALYZED: {', '.join(protected_cols)}
-FEATURES IN MODEL: {', '.join(feature_names[:20])}
+PROTECTED ATTRIBUTES: {', '.join(protected_cols)}
+MODEL FEATURES: {', '.join(feature_names[:20])}
 {model_note}
-COUNTERFACTUAL PATTERNS (what changes when demographics change):
+═══ EVIDENCE ═══
+COUNTERFACTUAL PATTERNS (flip rate = how often changing only this demographic changes the outcome):
 {patterns_summary}
 
-DECISION FLIP EXAMPLES (real cases where demographic change flipped the outcome):
+DECISION FLIP EXAMPLES (real cases where the same person, different demographic, got a different outcome):
 {flip_examples}
 
-BIAS HOTSPOT SUMMARY (from topology map):
+BIAS HOTSPOTS (from statistical topology map):
 {hotspots_summary}
 
-Generate a Counterfactual Constitution document with exactly these sections:
+═══ REQUIRED OUTPUT ═══
+Write exactly these 7 sections in Markdown. Use **bold** for key numbers. Be specific — cite the numbers above.
 
 ## 1. Executive Summary
-(2-3 sentences: what did we find, how serious is it, who is affected)
+2-3 sentences. Name the most affected group and the flip rate. State the real-world consequence (e.g. "loan denied", "job application rejected"). Lead with impact, not methodology.
 
 ## 2. Implicit Decision Rules
-(List the model's apparent rules as plain-English "IF...THEN" statements derived from counterfactual evidence.
-E.g. "IF applicant is male THEN approval probability increases by ~{{X}}% independent of qualifications")
+List 3-6 rules the model appears to follow. Format each as a blockquote:
+
+> **Rule N:** IF [demographic condition] THEN [outcome effect] — flip rate: X%, avg probability shift: ±Y%
 
 ## 3. Demographic Sensitivity Index
-(For each protected attribute: flip rate, probability shift, severity, and plain-English explanation
-of what the flip means in the real world — job denied, loan rejected, etc.)
+
+| Attribute | Flip Rate | Avg Prob Shift | Severity | Real-World Meaning |
+|-----------|-----------|----------------|----------|--------------------|
+(one row per protected attribute from the patterns data — fill in all columns)
+
+Add 1-2 sentences per attribute explaining what the flip means in practice for a real person.
 
 ## 4. Most Affected Groups
-(Rank the demographic intersections most disadvantaged by the model's decisions)
+The top 3 most disadvantaged groups, ranked by impact. For each: group name, how much worse their outcomes are, and one concrete example of what someone in this group experiences differently.
 
 ## 5. Structural vs. Proxy Bias
-(Is the bias direct — the model directly uses demographics — or indirect via proxy features?)
+One paragraph: is the bias direct (model uses demographics explicitly) or through proxies (job title, zip code, biography length, etc.)? Name the likely proxy features from the model's feature list if evident.
 
-## 6. Legal Risk Assessment
-(Under EU AI Act, US EEOC, and the 4/5ths rule for disparate impact)
+## 6. Legal & Compliance Risk
 
-## 7. Recommended Remediation Priority
-(Which bias should be fixed first, and why, based on impact severity)
+| Framework | Threshold | Finding | Status |
+|-----------|-----------|---------|--------|
+| US EEOC 4/5ths Rule | DI ≥ 0.80 | [value from data] | ✅ Pass / ⚠️ Borderline / ❌ Fail |
+| EU AI Act (High-Risk Systems) | SPD ≤ 0.10 | [value from data] | ... |
+| UK Equality Act 2010 | No numeric threshold | [qualitative finding] | ... |
 
-Write in clear, accessible language. Use specific numbers from the data. 
-Make it readable for both a non-technical HR manager and a data scientist.
-Use markdown formatting."""
+## 7. Remediation Priority
+Numbered list of specific, actionable fixes in priority order (most urgent first). For each fix: what to change, why it matters most, and how to verify the bias is gone after the fix."""
 
         return await ask_gemini(prompt)
 

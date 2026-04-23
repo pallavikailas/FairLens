@@ -78,28 +78,35 @@ class BiasCartographyService:
         else:
             target = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
         overall_rate = float(target.mean())
-        if overall_rate == 0:
-            return []
         metrics = []
         for col in present:
+            # Skip free-text columns — individual value slices are noise, not signal
+            if df[col].dtype == object and df[col].nunique() > 20:
+                continue
             for val in df[col].dropna().unique():
                 mask = df[col] == val
                 if mask.sum() < 5:
                     continue
                 group_rate = float(target[mask].mean())
                 spd = round(group_rate - overall_rate, 4)
-                di = round(group_rate / overall_rate, 4) if overall_rate > 0 else 0
+                di = round(group_rate / overall_rate, 4) if overall_rate > 0 else None
                 metrics.append({
                     "label": f"{col}={val}", "attribute": col, "value": str(val),
                     "size": int(mask.sum()), "positive_rate": round(group_rate, 4),
                     "overall_rate": round(overall_rate, 4),
                     "statistical_parity_diff": spd, "disparate_impact": di,
                     "bias_magnitude": round(abs(spd), 4),
-                    "flagged": abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD or di < settings.DISPARATE_IMPACT_THRESHOLD,
+                    "flagged": abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD or (
+                        di is not None and di < settings.DISPARATE_IMPACT_THRESHOLD
+                    ),
                 })
         if len(present) >= 2:
             for i, c1 in enumerate(present):
                 for c2 in present[i+1:]:
+                    # Skip intersectional slices if either column is high-cardinality text
+                    if (df[c1].dtype == object and df[c1].nunique() > 20) or \
+                       (df[c2].dtype == object and df[c2].nunique() > 20):
+                        continue
                     for v1 in df[c1].dropna().unique()[:4]:
                         for v2 in df[c2].dropna().unique()[:4]:
                             mask = (df[c1] == v1) & (df[c2] == v2)
@@ -107,14 +114,16 @@ class BiasCartographyService:
                                 continue
                             group_rate = float(target[mask].mean())
                             spd = round(group_rate - overall_rate, 4)
-                            di = round(group_rate / overall_rate, 4) if overall_rate > 0 else 0
+                            di = round(group_rate / overall_rate, 4) if overall_rate > 0 else None
                             metrics.append({
                                 "label": f"{c1}={v1} \u2229 {c2}={v2}", "attribute": f"{c1}+{c2}",
                                 "value": f"{v1}+{v2}", "size": int(mask.sum()),
                                 "positive_rate": round(group_rate, 4), "overall_rate": round(overall_rate, 4),
                                 "statistical_parity_diff": spd, "disparate_impact": di,
                                 "bias_magnitude": round(abs(spd), 4),
-                                "flagged": abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD or di < settings.DISPARATE_IMPACT_THRESHOLD,
+                                "flagged": abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD or (
+                                    di is not None and di < settings.DISPARATE_IMPACT_THRESHOLD
+                                ),
                             })
         return sorted(metrics, key=lambda m: m["bias_magnitude"], reverse=True)
 
@@ -175,12 +184,13 @@ Return ONLY this JSON:
         if not slice_metrics:
             return {"score": 100, "label": "Fair", "color": "green"}
 
-        single = [m for m in slice_metrics if "∩" not in m["label"]]
+        single = [m for m in slice_metrics if "\u2229" not in m["label"]]
         avg_spd = float(np.mean([abs(m["statistical_parity_diff"]) for m in single])) if single else 0.0
-        avg_di_penalty = float(np.mean([
+        di_penalties = [
             max(0, settings.DISPARATE_IMPACT_THRESHOLD - m["disparate_impact"])
-            for m in single
-        ])) if single else 0.0
+            for m in single if m.get("disparate_impact") is not None
+        ]
+        avg_di_penalty = float(np.mean(di_penalties)) if di_penalties else 0.0
         flagged_ratio = sum(1 for m in single if m.get("flagged")) / max(len(single), 1)
 
         raw = 100 - (avg_spd * 200) - (avg_di_penalty * 100) - (flagged_ratio * 20)

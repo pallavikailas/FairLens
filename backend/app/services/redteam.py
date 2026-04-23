@@ -178,12 +178,17 @@ class FairnessRedTeamAgent:
             if attr not in X_train.columns:
                 continue
 
-            # Strategy: take real samples and flip the protected attribute to all values
+            # Skip free-text columns — flipping individual text values produces noise, not signal
+            if X_train[attr].dtype == object and X_train[attr].nunique() > 20:
+                log.append(f"[Attack Agent] Skipping '{attr}' — high-cardinality text column ({X_train[attr].nunique()} unique values). Use a categorical protected attribute instead.")
+                continue
+
+            # Cap to 8 most-frequent values to keep probe count tractable
+            top_values = X_train[attr].value_counts().head(8).index.tolist()
             base_samples = X_train.sample(min(20, len(X_train)), random_state=iteration)
-            attr_values = X_train[attr].unique()
 
             for _, row in base_samples.iterrows():
-                for val in attr_values:
+                for val in top_values:
                     probe = row.copy()
                     probe[attr] = val
                     probes.append({
