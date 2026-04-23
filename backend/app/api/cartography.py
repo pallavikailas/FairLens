@@ -105,9 +105,15 @@ async def analyze_bias_cartography(
                 if "text" not in df_pred.columns:
                     str_cols = df_pred.select_dtypes(include=["object"]).columns.tolist()
                     df_pred["text"] = df_pred[str_cols].fillna("").astype(str).agg(" ".join, axis=1) if str_cols else df_pred.astype(str).agg(" ".join, axis=1)
-                preds = adapter.predict(df_pred)
-                model_predictions = [int(p) for p in preds]
-                logger.info(f"[{audit_id}] HuggingFace classifier '{api_endpoint}' generated {len(model_predictions)} predictions")
+                # HF Inference API is slow (~0.5s/call) — sample to keep latency under 90s
+                hf_sample_size = min(150, len(df_pred))
+                sample_idx = df_pred.sample(hf_sample_size, random_state=42).index.tolist()
+                preds_sample = adapter.predict(df_pred.loc[sample_idx].reset_index(drop=True))
+                full_preds = np.zeros(len(df_pred), dtype=int)
+                for i, idx in enumerate(sample_idx):
+                    full_preds[idx] = int(preds_sample[i])
+                model_predictions = full_preds.tolist()
+                logger.info(f"[{audit_id}] HuggingFace classifier '{api_endpoint}' generated predictions on {hf_sample_size} sampled rows")
             except Exception as e:
                 logger.warning(f"[{audit_id}] HuggingFace model predictions failed: {e} — falling back to dataset labels")
 
