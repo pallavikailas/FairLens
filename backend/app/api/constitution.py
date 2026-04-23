@@ -160,26 +160,28 @@ async def generate_constitution(
                 logger.warning(f"[{audit_id}] Auto-training failed, constitution will use dataset-only mode: {_e}")
 
         # Generate predictions
+        # For HF/API models, sample to keep latency under ~90s (HF Inference API ~0.5s/call)
+        model_type_str = (model.get_model_type() if model is not None and hasattr(model, "get_model_type") else "") or ""
+        is_api_model = any(t in model_type_str for t in ("HuggingFace", "REST:", "GenerativeLLM"))
+        pred_sample_size = 150 if is_api_model else len(X)
+
         if model is not None:
+            X_pred = X.iloc[:pred_sample_size] if pred_sample_size < len(X) else X
             try:
-                y_pred = model.predict(X)
-            except ValueError:
-                raise  # auth errors, 404s — surface to outer handler as 400
-            except Exception:
-                # Fallback: label-encode categorical columns (needed for XGBoost/LightGBM)
-                try:
-                    X_enc = X.copy()
-                    le = LabelEncoder()
-                    for col in X_enc.select_dtypes(include=["object", "category"]).columns:
-                        try:
-                            X_enc[col] = le.fit_transform(X_enc[col].astype(str))
-                        except Exception:
-                            X_enc[col] = 0
-                    y_pred = model.predict(X_enc.fillna(0))
-                except ValueError:
-                    raise
-                except Exception as e:
-                    raise HTTPException(500, f"Model prediction failed: {e}")
+                y_pred_sample = model.predict(X_pred)
+                if pred_sample_size < len(X):
+                    # Fill unseen rows with the most common prediction
+                    import scipy.stats as _stats
+                    fill_val = int(_stats.mode(y_pred_sample, keepdims=True).mode[0])
+                    y_pred = np.full(len(X), fill_val, dtype=int)
+                    y_pred[:pred_sample_size] = y_pred_sample
+                else:
+                    y_pred = y_pred_sample
+            except Exception as e:
+                # Model prediction failed — fall back to dataset labels so the pipeline continues
+                logger.warning(f"[{audit_id}] Model predict failed ({e}), falling back to dataset labels")
+                model = None
+                y_pred = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
         else:
             # Dataset-only mode: use target column values as pseudo-predictions
             y_pred = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)

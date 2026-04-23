@@ -1,6 +1,6 @@
 """
 Gemini client — supports two modes:
-  1. Local dev: GEMINI_API_KEY in .env → uses google-generativeai directly (no GCP needed)
+  1. Local dev: GEMINI_API_KEY in .env → uses google-genai directly (no GCP needed)
   2. Cloud Run:  no key needed → uses Vertex AI with service account ADC
 """
 import asyncio
@@ -12,43 +12,53 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+_GEN_CONFIG = {"temperature": 0.2, "max_output_tokens": 8192}
 
-def _make_model():
-    """Return a Gemini model using whichever auth is available."""
+
+def _make_client():
+    """Return a (client, model_name) tuple using whichever auth is available."""
+    from google import genai
+
     if settings.GEMINI_API_KEY:
-        import warnings
-        import google.generativeai as genai
-        from google.generativeai import GenerationConfig as GC
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-        return genai.GenerativeModel(
-            settings.GEMINI_MODEL,
-            generation_config=GC(temperature=0.2, max_output_tokens=8192),
-        ), "genai"
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        return client, settings.GEMINI_MODEL, "genai"
     else:
-        import vertexai
-        from vertexai.generative_models import GenerativeModel, GenerationConfig
-        vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.VERTEX_AI_LOCATION)
-        return GenerativeModel(
-            settings.GEMINI_MODEL,
-            generation_config=GenerationConfig(temperature=0.2, max_output_tokens=8192),
-        ), "vertexai"
+        client = genai.Client(
+            vertexai=True,
+            project=settings.GOOGLE_CLOUD_PROJECT,
+            location=settings.VERTEX_AI_LOCATION,
+        )
+        return client, settings.GEMINI_MODEL, "vertexai"
 
 
 async def ask_gemini(prompt: str, expect_json: bool = False) -> str:
-    try:
-        model, mode = _make_model()
+    from google.genai import types
 
+    client, model_name, mode = _make_client()
+
+    gen_config = types.GenerateContentConfig(**_GEN_CONFIG)
+
+    try:
         if mode == "genai":
             loop = asyncio.get_event_loop()
             response = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: model.generate_content(prompt)),
+                loop.run_in_executor(
+                    None,
+                    lambda: client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=gen_config,
+                    ),
+                ),
                 timeout=55.0,
             )
         else:
             response = await asyncio.wait_for(
-                model.generate_content_async(prompt),
+                client.aio.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=gen_config,
+                ),
                 timeout=55.0,
             )
 

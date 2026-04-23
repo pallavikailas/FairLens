@@ -297,8 +297,12 @@ class HuggingFaceAdapter(BaseModelAdapter):
                         )
 
             # Fall back to legacy URL on 404 (model not on new router yet)
-            if resp.status_code == 404 and primary_url != fallback_url:
-                resp = requests.post(fallback_url, json={"inputs": batch}, headers=headers, timeout=90)
+            # or on 401/403 (new router requires token even for public models; legacy is more permissive)
+            if resp.status_code in (401, 403, 404) and primary_url != fallback_url:
+                legacy_headers = {"Content-Type": "application/json"}
+                if self.hf_token:
+                    legacy_headers["Authorization"] = f"Bearer {self.hf_token}"
+                resp = requests.post(fallback_url, json={"inputs": batch}, headers=legacy_headers, timeout=90)
 
             if resp.status_code == 503:
                 raise RuntimeError(
@@ -516,7 +520,7 @@ class GenerativeLLMAdapter(BaseModelAdapter):
                     f"HuggingFace model '{self.model_name}' timed out. "
                     "The model may be cold-starting — wait ~30s and retry."
                 )
-            if resp.status_code == 404:
+            if resp.status_code in (401, 403, 404):
                 resp = requests.post(fallback_url, json=payload, headers=headers, timeout=90)
             if resp.status_code == 400:
                 continue  # try simpler payload
