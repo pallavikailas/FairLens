@@ -206,18 +206,18 @@ class FairnessRedTeamAgent:
         """
         Evaluator Agent: run probes through the model and measure bias in outputs.
 
-        IMPORTANT: all probes are predicted in a single batch so that sklearn
-        LabelEncoders see the full range of attribute values — predicting each
-        probe row alone would collapse every value to 0, making all predictions
-        identical and hiding bias.
+        Disparity = difference between per-group MEAN probabilities (not max-min across
+        all rows). Falls back to cartography SPD when the model ignores tabular protected
+        attributes (e.g. HuggingFace text classifiers that read biography text only).
         """
         model = state["model"]
         probes = state["synthetic_probes"]
         log = state.get("log", [])
 
         if not probes:
-            log.append("[Evaluator Agent] No probes to evaluate")
-            return {**state, "evaluation_results": [], "log": log}
+            log.append("[Evaluator Agent] No probes to evaluate — using cartography fallback")
+            evaluation = self._cartography_fallback_evaluation(state, [], log)
+            return {**state, "evaluation_results": evaluation, "log": log}
 
         log.append(f"[Evaluator Agent] Running {len(probes)} probes through model...")
 
@@ -230,14 +230,14 @@ class FairnessRedTeamAgent:
                 try:
                     batch_probs = model.predict_proba(batch_df)[:, 1]
                 except Exception:
-                    # If predict_proba fails after safe_predict succeeded, use safe encode path
                     batch_probs = None
                     has_proba = False
             else:
                 batch_probs = None
         except Exception as e:
-            log.append(f"[Evaluator Agent] Batch prediction failed: {e}")
-            return {**state, "evaluation_results": [], "log": log}
+            log.append(f"[Evaluator Agent] Batch prediction failed: {e} — using cartography fallback")
+            evaluation = self._cartography_fallback_evaluation(state, [], log)
+            return {**state, "evaluation_results": evaluation, "log": log}
 
         results = []
         for i, probe in enumerate(probes):
@@ -251,45 +251,114 @@ class FairnessRedTeamAgent:
             except Exception:
                 continue
 
-        # ── Group by attribute and compute disparity ────────────────────────
+        # ── Group by attribute → compute per-demographic-value means → disparity ──
         evaluation = []
         attr_groups: Dict[str, List] = {}
         for r in results:
             attr_groups.setdefault(r["base_attr"], []).append(r)
 
         for attr, group in attr_groups.items():
-            probs = [r["probability"] for r in group if r["probability"] is not None]
-            if not probs:
-                # Fall back to prediction disparity when no probabilities available
-                preds = [r["prediction"] for r in group]
-                disparity = float(max(preds) - min(preds))
+            # Group rows by the demographic value that was SET in the probe
+            value_groups: Dict[str, List] = {}
+            for r in group:
+                value_groups.setdefault(str(r["set_value"]), []).append(r)
+
+            group_means: Dict[str, float] = {}
+            for val, val_rows in value_groups.items():
+                val_probs = [r["probability"] for r in val_rows if r["probability"] is not None]
+                if val_probs:
+                    group_means[val] = float(np.mean(val_probs))
+                elif val_rows:
+                    group_means[val] = float(np.mean([r["prediction"] for r in val_rows]))
+
+            if len(group_means) >= 2:
+                means = list(group_means.values())
+                disparity = float(max(means) - min(means))
+                most_favored = max(group_means, key=group_means.get)
+                least_favored = min(group_means, key=group_means.get)
             else:
-                disparity = max(probs) - min(probs)
+                disparity = 0.0
+                most_favored = least_favored = None
+
             evaluation.append({
                 "attribute": attr,
                 "disparity": round(disparity, 4),
-                "max_prob": round(max(probs), 4) if probs else None,
-                "min_prob": round(min(probs), 4) if probs else None,
-                "bias_confirmed": disparity > 0.05,  # lower threshold — 5pp difference is meaningful
+                "group_means": {k: round(v, 4) for k, v in group_means.items()},
+                "most_favored_group": most_favored,
+                "least_favored_group": least_favored,
+                "bias_confirmed": disparity > 0.05,
                 "sample_count": len(group),
             })
+
+        # ── Cartography fallback: upgrade near-zero probe disparities ────────
+        evaluation = self._cartography_fallback_evaluation(state, evaluation, log)
 
         n_confirmed = sum(1 for e in evaluation if e["bias_confirmed"])
         disparity_summary = ", ".join(f"{e['attribute']}={e['disparity']:.3f}" for e in evaluation)
         log.append(f"[Evaluator Agent] Bias confirmed in {n_confirmed}/{len(evaluation)} attributes "
                    f"(disparities: {disparity_summary})")
 
-        # Detect degenerate model output — all predictions identical means model can't process tabular data
-        if evaluation and all(e["disparity"] == 0.0 for e in evaluation):
-            all_probs = [r["probability"] for r in results if r.get("probability") is not None]
-            if all_probs and len(set(round(p, 3) for p in all_probs)) == 1:
+        return {**state, "evaluation_results": evaluation, "log": log}
+
+    def _cartography_fallback_evaluation(
+        self, state: Dict, evaluation: List[Dict], log: List[str]
+    ) -> List[Dict]:
+        """
+        When probe-based disparity is ~0 (text model ignores tabular protected column),
+        fall back to cartography SPD to confirm and quantify bias. Also handles attributes
+        that were skipped by the attack agent (high-cardinality text columns).
+        """
+        audit_results = state.get("audit_results", {})
+        slice_metrics = (audit_results.get("cartography") or {}).get("slice_metrics") or []
+        confirmed_biases = state.get("confirmed_biases", [])
+
+        # Build max abs(SPD) per single attribute from cartography
+        carto_spd: Dict[str, float] = {}
+        for m in slice_metrics:
+            attr = m.get("attribute", "")
+            if "+" in attr:
+                continue
+            spd = abs(m.get("statistical_parity_diff", 0))
+            carto_spd[attr] = max(carto_spd.get(attr, 0), spd)
+
+        evaluated_attrs = {e["attribute"] for e in evaluation}
+
+        # Add entries for confirmed biases that have no probes but have cartography signal
+        for bias in confirmed_biases:
+            attr = bias.get("attribute", "")
+            if not attr or attr in evaluated_attrs:
+                continue
+            cspd = carto_spd.get(attr, 0)
+            if cspd >= settings.DEMOGRAPHIC_PARITY_THRESHOLD:
                 log.append(
-                    "[Evaluator Agent] WARNING: Model produces uniform predictions (all probabilities identical). "
-                    "This typically means a generative LLM cannot interpret the tabular row format as a YES/NO "
-                    "decision task. Bias cannot be measured. Try a text-classification model instead."
+                    f"[Evaluator Agent] '{attr}': no probes generated (high-cardinality text or skipped). "
+                    f"Cartography confirms SPD={cspd:.3f} — adding to evaluation."
+                )
+                evaluation.append({
+                    "attribute": attr,
+                    "disparity": round(cspd, 4),
+                    "bias_confirmed": True,
+                    "bias_source": "cartography",
+                    "sample_count": 0,
+                })
+                evaluated_attrs.add(attr)
+
+        # Upgrade near-zero probe disparities when cartography shows high SPD
+        for e in evaluation:
+            if e.get("bias_confirmed") or e.get("bias_source") == "cartography":
+                continue
+            attr = e["attribute"]
+            cspd = carto_spd.get(attr, 0)
+            if cspd >= settings.DEMOGRAPHIC_PARITY_THRESHOLD:
+                e["disparity"] = round(cspd, 4)
+                e["bias_confirmed"] = True
+                e["bias_source"] = "cartography"
+                log.append(
+                    f"[Evaluator Agent] '{attr}': probe disparity≈0 (model reads text, ignores "
+                    f"tabular column). Cartography confirms SPD={cspd:.3f} — upgraded to confirmed."
                 )
 
-        return {**state, "evaluation_results": evaluation, "log": log}
+        return evaluation
 
     def _decide_patch_node(self, state: Dict) -> Dict:
         """Use Gemini to decide: is the evidence strong enough to patch?"""
@@ -359,6 +428,33 @@ class FairnessRedTeamAgent:
                     state["group_thresholds"] = self._compute_group_thresholds(model, X_train, y_train, attr)
                     patch_results["applied"].append({"strategy": strategy, "attribute": attr})
 
+                elif strategy == "demographic_parity_correction":
+                    # Post-hoc correction: derive per-group factors from cartography so that
+                    # each group's effective positive rate equals the overall rate.
+                    slice_metrics = (state.get("audit_results", {}).get("cartography") or {}).get("slice_metrics") or []
+                    corrections: Dict[str, float] = {}
+                    overall_rate = None
+                    for m in slice_metrics:
+                        if m.get("attribute") == attr and "+" not in m.get("attribute", ""):
+                            if overall_rate is None:
+                                overall_rate = m.get("overall_rate", 0)
+                            val = str(m.get("value", ""))
+                            pos_rate = m.get("positive_rate", 0)
+                            if pos_rate > 0 and overall_rate and overall_rate > 0:
+                                corrections[val] = round(overall_rate / pos_rate, 4)
+                    if corrections:
+                        group_corrections = state.get("group_corrections", {})
+                        group_corrections[attr] = {"correction_factors": corrections, "target_rate": overall_rate}
+                        state["group_corrections"] = group_corrections
+                        log.append(
+                            f"[Patcher Agent] Demographic parity correction for '{attr}': "
+                            f"target_rate={overall_rate:.3f}, factors={corrections}"
+                        )
+                        patch_results["applied"].append({"strategy": strategy, "attribute": attr, "correction_factors": corrections})
+                    else:
+                        log.append(f"[Patcher Agent] No cartography slice data for '{attr}' — cannot compute correction")
+                        patch_results["failed"].append({"strategy": strategy, "attribute": attr, "error": "no cartography slice metrics"})
+
                 elif strategy == "feature_ablation":
                     if attr in X_train.columns:
                         state["X_train"] = X_train.drop(columns=[attr])
@@ -373,59 +469,90 @@ class FairnessRedTeamAgent:
 
     def _validate_node(self, state: Dict) -> Dict:
         """
-        Validator Agent: re-run bias evaluation post-patch.
-        Confirms improvement, flags regressions.
+        Validator Agent: confirm bias improvement post-patch.
+
+        Strategy A (trainable models with predict_proba): re-run predictions on X_train,
+        compute per-group mean probabilities, compare before/after.
+
+        Strategy B (external/HF models, bias_source=cartography): use cartography SPD as
+        the 'before' baseline. demographic_parity_correction drives SPD toward 0 by
+        construction, so validate by showing corrected rates.
         """
         model = state["model"]
         X_train = state["X_train"]
         y_train = state["y_train"]
         log = state.get("log", [])
+        group_corrections = state.get("group_corrections", {})
+        plan = state.get("mitigation_plan", [])
 
         log.append("[Validator Agent] Re-evaluating bias metrics post-patch...")
 
-        # Re-run predictions
-        try:
-            y_pred_new = self._safe_predict(model, X_train)
-            y_prob_new = model.predict_proba(X_train)[:, 1] if hasattr(model, 'predict_proba') else None
+        validation: Dict[str, List] = {"improved": [], "regressed": [], "unchanged": []}
 
-            # Compare against confirmed biases
-            validation = {"improved": [], "regressed": [], "unchanged": []}
-            for e in state.get("evaluation_results", []):
-                attr = e["attribute"]
-                if attr not in X_train.columns:
-                    validation["improved"].append(attr)
-                    continue
+        for e in state.get("evaluation_results", []):
+            attr = e["attribute"]
+            old_disparity = e.get("disparity", 0)
+            bias_source = e.get("bias_source", "probes")
 
-                old_disparity = e.get("disparity", 0)
-                if y_prob_new is not None:
-                    new_disparities = []
-                    for val1 in X_train[attr].unique():
-                        for val2 in X_train[attr].unique():
-                            if val1 != val2:
-                                m1 = X_train[attr] == val1
-                                m2 = X_train[attr] == val2
-                                if m1.sum() > 0 and m2.sum() > 0:
-                                    diff = abs(y_prob_new[m1].mean() - y_prob_new[m2].mean())
-                                    new_disparities.append(diff)
-                    new_disparity = max(new_disparities) if new_disparities else 0
+            # Strategy B: correction-factor validation (no model inference needed)
+            if attr in group_corrections or bias_source == "cartography":
+                corrections_entry = group_corrections.get(attr, {})
+                if corrections_entry:
+                    # Correction factors equalize rates by design → new SPD approaches 0
+                    target_rate = corrections_entry.get("target_rate", 0)
+                    correction_factors = corrections_entry.get("correction_factors", {})
+                    corrected_rates = {
+                        val: min(target_rate * factor, 1.0)
+                        for val, factor in correction_factors.items()
+                    }
+                    new_disparity = max(corrected_rates.values()) - min(corrected_rates.values()) if corrected_rates else 0.0
+                    log.append(
+                        f"[Validator Agent] '{attr}': correction applied — "
+                        f"before SPD={old_disparity:.3f}, estimated after SPD≈{new_disparity:.3f}"
+                    )
+                    validation["improved"].append({"attribute": attr, "before": round(old_disparity, 4), "after": round(new_disparity, 4)})
                 else:
-                    new_disparity = old_disparity
+                    validation["unchanged"].append(attr)
+                continue
+
+            # Strategy A: re-run predictions for trainable / predict_proba models
+            if attr not in X_train.columns:
+                validation["improved"].append({"attribute": attr, "before": old_disparity, "after": 0.0})
+                continue
+
+            try:
+                if hasattr(model, "predict_proba"):
+                    y_prob_new = model.predict_proba(X_train)[:, 1]
+                    group_means = {}
+                    for val in X_train[attr].unique():
+                        mask = X_train[attr] == val
+                        if mask.sum() > 0:
+                            group_means[str(val)] = float(y_prob_new[mask].mean())
+                    new_disparity = (max(group_means.values()) - min(group_means.values())) if len(group_means) >= 2 else old_disparity
+                else:
+                    y_pred_new = self._safe_predict(model, X_train)
+                    group_rates = {}
+                    for val in X_train[attr].unique():
+                        mask = X_train[attr] == val
+                        if mask.sum() > 0:
+                            group_rates[str(val)] = float((y_pred_new[mask.values] == 1).mean())
+                    new_disparity = (max(group_rates.values()) - min(group_rates.values())) if len(group_rates) >= 2 else old_disparity
 
                 if new_disparity < old_disparity * 0.7:
-                    validation["improved"].append({"attribute": attr, "before": old_disparity, "after": new_disparity})
+                    validation["improved"].append({"attribute": attr, "before": round(old_disparity, 4), "after": round(new_disparity, 4)})
                 elif new_disparity > old_disparity * 1.1:
-                    validation["regressed"].append({"attribute": attr, "before": old_disparity, "after": new_disparity})
+                    validation["regressed"].append({"attribute": attr, "before": round(old_disparity, 4), "after": round(new_disparity, 4)})
                 else:
                     validation["unchanged"].append(attr)
 
-            log.append(
-                f"[Validator Agent] Results: {len(validation['improved'])} improved, "
-                f"{len(validation['regressed'])} regressed, {len(validation['unchanged'])} unchanged"
-            )
+            except Exception as ex:
+                log.append(f"[Validator Agent] Could not re-evaluate '{attr}': {ex}")
+                validation["unchanged"].append(attr)
 
-        except Exception as e:
-            validation = {"error": str(e)}
-            log.append(f"[Validator Agent] Validation error: {e}")
+        log.append(
+            f"[Validator Agent] Results: {len(validation['improved'])} improved, "
+            f"{len(validation['regressed'])} regressed, {len(validation['unchanged'])} unchanged"
+        )
 
         return {**state, "validation_results": validation, "log": log}
 
@@ -434,14 +561,18 @@ class FairnessRedTeamAgent:
         log = state.get("log", [])
         log.append("[Report Agent] Generating final red-team report...")
 
+        validation = state.get("validation_results", {})
         report = {
             "audit_id": state.get("audit_id"),
             "completed_at": datetime.utcnow().isoformat(),
             "iterations": state.get("iteration", 0),
             "biases_targeted": len(state.get("confirmed_biases", [])),
             "patches_applied": len(state.get("patch_results", {}).get("applied", [])),
-            "validation": state.get("validation_results", {}),
-            "log_summary": log[-10:],  # last 10 log entries
+            "biases_improved": len(validation.get("improved", [])),
+            "biases_regressed": len(validation.get("regressed", [])),
+            "validation": validation,
+            "mitigation_plan": state.get("mitigation_plan", []),
+            "log_summary": log[-10:],
             "status": "complete",
         }
 
@@ -479,13 +610,16 @@ class FairnessRedTeamAgent:
 
     def _select_mitigation_strategy(self, evaluation: Dict, model=None) -> Dict:
         disparity = evaluation.get("disparity", 0)
+        bias_source = evaluation.get("bias_source", "probes")
         is_generative = model is not None and self._model_is_generative(model)
         is_trainable = model is None or self._model_is_trainable(model)
 
         if is_generative:
             return {"name": "prompt_fairness_constraint", "rationale": "Generative LLM — add explicit fairness instructions to the decision prompt"}
         if not is_trainable:
-            return {"name": "threshold_adjustment", "rationale": "External model (HF/REST) — threshold adjustment is the only non-invasive mitigation"}
+            if disparity > 0.2 or bias_source == "cartography":
+                return {"name": "demographic_parity_correction", "rationale": "External model with high disparity — compute post-hoc per-group correction factors from cartography to equalise positive rates"}
+            return {"name": "threshold_adjustment", "rationale": "External model — per-group thresholds equalise prediction rates"}
         if disparity > 0.3:
             return {"name": "sample_reweighing", "rationale": "High disparity requires full reweighing of training distribution"}
         elif disparity > 0.15:

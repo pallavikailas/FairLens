@@ -354,7 +354,13 @@ export default function ResultsPage() {
     if (!store.cartographyResults) return
     setDownloading(true)
     try {
-      await exportPdfReport(store.cartographyResults)
+      const fullReport = {
+        ...store.cartographyResults,
+        constitution: store.constitutionResults ?? null,
+        proxy_hunt: store.proxyResults ?? null,
+        redteam: store.redteamResults ?? null,
+      }
+      await exportPdfReport(fullReport)
     } catch (e: any) {
       alert(`PDF export failed: ${e.message}`)
     } finally {
