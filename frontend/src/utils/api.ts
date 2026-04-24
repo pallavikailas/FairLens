@@ -106,9 +106,13 @@ export function streamRedTeam(
   fd.append('protected_cols', protectedCols.length > 0 ? protectedCols.join(',') : 'auto')
   fd.append('target_col', targetCol || 'auto')
   fd.append('confirmed_biases', JSON.stringify(confirmedBiases))
-  // Send only summaries — full results can be several MB and exceed form field limits
+  // Include slice_metrics so the red-team cartography fallback has SPD data
   const auditSummary = {
-    cartography: { summary: auditResults?.cartography?.summary, audit_id: auditResults?.cartography?.audit_id },
+    cartography: {
+      summary: auditResults?.cartography?.summary,
+      audit_id: auditResults?.cartography?.audit_id,
+      slice_metrics: auditResults?.cartography?.slice_metrics ?? [],
+    },
     constitution: { summary: auditResults?.constitution?.summary },
     proxy: { summary: auditResults?.proxy?.summary },
   }

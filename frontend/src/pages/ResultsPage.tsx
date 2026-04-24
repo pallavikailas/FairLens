@@ -583,25 +583,66 @@ export default function ResultsPage() {
           )}
 
           {activeTab === 'proxy' && proxy && (
-            <div className="grid md:grid-cols-2 gap-6">
-              <div className="glass rounded-2xl p-5 border border-white/5">
-                <h3 className="font-display font-semibold text-white text-sm mb-1">Proxy Dependency Graph</h3>
-                <p className="text-white/30 text-xs mb-4 font-mono">
-                  Purple = protected attributes. Red/orange = high-risk proxies.
-                </p>
-                <ProxyGraph graph={proxy.graph} chains={proxy.proxy_chains || []} />
-              </div>
-              <div className="glass rounded-2xl p-5 border border-white/5 overflow-y-auto max-h-[400px]">
-                <h3 className="font-display font-semibold text-white text-sm mb-4">Proxy Chains</h3>
-                {proxy.proxy_chains?.slice(0, 15).map((c: any, i: number) => (
-                  <div key={i} className="border-b border-white/5 pb-3 mb-3 last:border-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-white/70 text-xs font-mono">{c.path?.join(' → ')}</span>
-                      <SeverityBadge level={c.risk_level} />
-                    </div>
-                    <div className="text-white/30 text-xs">{c.explanation}</div>
+            <div className="space-y-6">
+              {/* Gemini narrative */}
+              {proxy.gemini_analysis?.headline && (
+                <div className="glass rounded-2xl p-5 border border-lens/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-lens-light text-xs font-mono font-semibold">AI Analysis</span>
+                    <SeverityBadge level={proxy.gemini_analysis.severity} />
                   </div>
-                ))}
+                  <p className="text-white/80 text-sm mb-3">{proxy.gemini_analysis.headline}</p>
+                  {proxy.gemini_analysis.key_findings?.length > 0 && (
+                    <ul className="space-y-1 mb-3">
+                      {proxy.gemini_analysis.key_findings.map((f: string, i: number) => (
+                        <li key={i} className="text-white/50 text-xs font-mono flex gap-2">
+                          <span className="text-lens-light">›</span>{f}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {proxy.gemini_analysis.debiasing_strategy && (
+                    <div className="mt-2 p-3 rounded-xl bg-white/3 border border-white/5">
+                      <span className="text-white/40 text-xs font-mono">Debiasing strategy: </span>
+                      <span className="text-white/70 text-xs">{proxy.gemini_analysis.debiasing_strategy}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="grid md:grid-cols-2 gap-6">
+                <div className="glass rounded-2xl p-5 border border-white/5">
+                  <h3 className="font-display font-semibold text-white text-sm mb-1">Proxy Dependency Graph</h3>
+                  <p className="text-white/30 text-xs mb-4 font-mono">
+                    Purple = protected attributes. Red/orange = high-risk proxies.
+                  </p>
+                  <ProxyGraph graph={proxy.graph} chains={proxy.proxy_chains || []} />
+                </div>
+                <div className="glass rounded-2xl p-5 border border-white/5 overflow-y-auto max-h-[400px]">
+                  <h3 className="font-display font-semibold text-white text-sm mb-4">Proxy Chains</h3>
+                  {proxy.proxy_chains?.slice(0, 15).map((c: any, i: number) => (
+                    <div key={i} className="border-b border-white/5 pb-3 mb-3 last:border-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-white/70 text-xs font-mono">{c.path?.join(' → ')}</span>
+                        <SeverityBadge level={c.risk_level} />
+                      </div>
+                      <div className="text-white/30 text-xs mb-1">{c.explanation}</div>
+                      {(c.corr_with_protected != null || c.corr_with_target != null) && (
+                        <div className="flex gap-3 mt-1">
+                          {c.corr_with_protected != null && (
+                            <span className="text-white/30 text-xs font-mono">
+                              protected corr: <span className="text-signal-amber">{(c.corr_with_protected * 100).toFixed(0)}%</span>
+                            </span>
+                          )}
+                          {c.corr_with_target != null && (
+                            <span className="text-white/30 text-xs font-mono">
+                              target corr: <span className="text-signal-red">{(c.corr_with_target * 100).toFixed(0)}%</span>
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}

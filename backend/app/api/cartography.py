@@ -150,7 +150,16 @@ async def analyze_bias_cartography(
             except Exception as e:
                 logger.warning(f"[{audit_id}] REST API model predictions failed: {e} — falling back to dataset labels")
 
-        # 4. Call cartography service with model predictions when available
+        # 4. Require a model — reject if no model was provided or all predictions failed
+        if model_predictions is None:
+            raise HTTPException(
+                400,
+                "No model provided or model prediction failed. "
+                "Upload a .pkl file or specify a model endpoint (HuggingFace, OpenAI, Gemini, REST API). "
+                "FairLens audits the model's decisions, not raw dataset labels."
+            )
+
+        # 5. Call cartography service with model predictions
         result = await cartography_service.run_cartography(
             dataset_csv=dataset_csv,
             protected_cols=protected,
@@ -163,7 +172,7 @@ async def analyze_bias_cartography(
         result["detected_target_col"] = target
         result["model_type"] = model_type
         result["dataset_source"] = dataset_source
-        result["analysis_source"] = "model_predictions" if model_predictions else "dataset_labels"
+        result["analysis_source"] = "model_predictions"
         result["compliance_tags"] = check_compliance(result.get("slice_metrics", []))
 
         return JSONResponse(content=result)

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuditStore } from '../hooks/useAuditStore'
-import { streamRedTeam } from '../utils/api'
+import { streamRedTeam, exportPdfReport } from '../utils/api'
 
 type AgentEvent = {
   node: string
@@ -265,19 +265,20 @@ export default function RedTeamPage() {
                 className="flex-1 py-3 rounded-xl border border-white/10 text-white/60 hover:text-white font-mono text-sm transition-all">
                 ← New Audit
               </button>
-              <button onClick={() => {
-                const blob = new Blob([JSON.stringify({
-                  cartography: store.cartographyResults,
-                  constitution: store.constitutionResults,
-                  proxy: store.proxyResults,
-                  redteam: finalResults,
-                }, null, 2)], { type: 'application/json' })
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement('a'); a.href = url
-                a.download = `fairlens-report.json`; a.click()
-                URL.revokeObjectURL(url)
+              <button onClick={async () => {
+                try {
+                  const fullReport = {
+                    ...store.cartographyResults,
+                    constitution: store.constitutionResults ?? null,
+                    proxy_hunt: store.proxyResults ?? null,
+                    redteam: finalResults,
+                  }
+                  await exportPdfReport(fullReport)
+                } catch (e: any) {
+                  alert(`PDF export failed: ${e.message}`)
+                }
               }} className="flex-1 py-3 rounded-xl bg-lens hover:bg-lens/90 text-white font-display font-semibold text-sm glow-lens transition-all">
-                ↓ Export Full Report
+                ↓ Export Full Report (PDF)
               </button>
             </div>
           </motion.div>

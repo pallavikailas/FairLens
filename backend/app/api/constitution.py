@@ -5,7 +5,6 @@ from typing import Optional
 import pandas as pd
 import numpy as np
 import pickle, io, uuid, json, asyncio, logging
-from sklearn.preprocessing import LabelEncoder
 
 from app.services.constitution import constitution_service
 from app.services.auto_detect import auto_detect_columns
@@ -117,47 +116,14 @@ async def generate_constitution(
         feature_cols = resolve_feature_cols(model, df, tgt) if model is not None else [c for c in df.columns if c != tgt]
         X = df[feature_cols]
 
-        # Auto-train a reference model when none is provided so counterfactual simulation always runs
+        # Require a model — reject if none was provided
         if model is None:
-            try:
-                import warnings
-                from sklearn.linear_model import LogisticRegression
-                from app.services.model_adapter import FairLensAdapter
-
-                y_train = pd.to_numeric(df[tgt], errors="coerce").fillna(0).values.astype(int)
-
-                # Build fixed encoding maps so flipped attribute values encode consistently
-                encoding_maps: dict = {}
-                X_enc_train = X.copy()
-                for col in X_enc_train.select_dtypes(include=["object", "category"]).columns:
-                    try:
-                        le_fit = LabelEncoder()
-                        X_enc_train[col] = le_fit.fit_transform(X_enc_train[col].astype(str))
-                        encoding_maps[col] = {str(v): i for i, v in enumerate(le_fit.classes_)}
-                    except Exception:
-                        X_enc_train[col] = 0
-                X_enc_train = X_enc_train.fillna(0)
-
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    auto_clf = LogisticRegression(max_iter=500, random_state=42)
-                    auto_clf.fit(X_enc_train, y_train)
-
-                def _encode_df(X_in: pd.DataFrame) -> pd.DataFrame:
-                    X_e = X_in.copy()
-                    for col, mapping in encoding_maps.items():
-                        if col in X_e.columns:
-                            X_e[col] = X_e[col].astype(str).map(mapping).fillna(-1)
-                    return X_e.fillna(0)
-
-                model = FairLensAdapter.from_callable(
-                    predict_fn=lambda X_in: auto_clf.predict(_encode_df(X_in)),
-                    predict_proba_fn=lambda X_in: auto_clf.predict_proba(_encode_df(X_in)),
-                    model_name="AutoReference_LogisticRegression",
-                )
-                logger.info(f"[{audit_id}] Auto-trained reference LogisticRegression for counterfactual simulation")
-            except Exception as _e:
-                logger.warning(f"[{audit_id}] Auto-training failed, constitution will use dataset-only mode: {_e}")
+            raise HTTPException(
+                400,
+                "No model provided. Upload a .pkl file or specify a model endpoint "
+                "(HuggingFace, OpenAI, Gemini, REST API). "
+                "FairLens generates counterfactual constitutions from your model's decisions."
+            )
 
         # Generate predictions
         # For HF/API models, sample to keep latency under ~90s (HF Inference API ~0.5s/call)
@@ -165,26 +131,18 @@ async def generate_constitution(
         is_api_model = any(t in model_type_str for t in ("HuggingFace", "REST:", "GenerativeLLM"))
         pred_sample_size = 150 if is_api_model else len(X)
 
-        if model is not None:
-            X_pred = X.iloc[:pred_sample_size] if pred_sample_size < len(X) else X
-            try:
-                y_pred_sample = model.predict(X_pred)
-                if pred_sample_size < len(X):
-                    # Fill unseen rows with the most common prediction
-                    import scipy.stats as _stats
-                    fill_val = int(_stats.mode(y_pred_sample, keepdims=True).mode[0])
-                    y_pred = np.full(len(X), fill_val, dtype=int)
-                    y_pred[:pred_sample_size] = y_pred_sample
-                else:
-                    y_pred = y_pred_sample
-            except Exception as e:
-                # Model prediction failed — fall back to dataset labels so the pipeline continues
-                logger.warning(f"[{audit_id}] Model predict failed ({e}), falling back to dataset labels")
-                model = None
-                y_pred = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
-        else:
-            # Dataset-only mode: use target column values as pseudo-predictions
-            y_pred = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
+        X_pred = X.iloc[:pred_sample_size] if pred_sample_size < len(X) else X
+        try:
+            y_pred_sample = model.predict(X_pred)
+            if pred_sample_size < len(X):
+                import scipy.stats as _stats
+                fill_val = int(_stats.mode(y_pred_sample, keepdims=True).mode[0])
+                y_pred = np.full(len(X), fill_val, dtype=int)
+                y_pred[:pred_sample_size] = y_pred_sample
+            else:
+                y_pred = y_pred_sample
+        except Exception as e:
+            raise HTTPException(400, f"Model prediction failed: {e}. Check that the model is compatible with your dataset.")
 
         carto = json.loads(cartography_results)
 

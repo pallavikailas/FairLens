@@ -25,7 +25,6 @@ async def hunt_proxies(
         dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
         df = pd.read_csv(io.StringIO(dataset_csv))
 
-        # Resolve protected_cols — handle 'auto' sentinel
         is_auto = protected_cols in ("auto", "", "['auto']") or "auto" in protected_cols.split(",")
         if is_auto:
             detected = await auto_detect_columns(dataset_csv, audit_id)
@@ -35,7 +34,6 @@ async def hunt_proxies(
             protected = [c.strip() for c in protected_cols.split(",") if c.strip() and c.strip() != "auto"]
             tgt = target_col if target_col and target_col != "auto" else None
 
-        # Fallback target column detection
         if not tgt or tgt not in df.columns:
             for col in df.columns:
                 if df[col].nunique() == 2:
@@ -45,7 +43,9 @@ async def hunt_proxies(
                 tgt = df.columns[-1]
 
         X = df[[c for c in df.columns if c != tgt]]
-        result = proxy_hunter_service.hunt_proxies(X, protected, audit_id)
+        y = pd.to_numeric(df[tgt], errors="coerce").fillna(0) if tgt in df.columns else None
+
+        result = await proxy_hunter_service.run_hunt(X, y, protected, audit_id)
         return JSONResponse(content=result)
     except HTTPException:
         raise
