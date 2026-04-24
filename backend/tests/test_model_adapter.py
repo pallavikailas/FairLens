@@ -5,7 +5,13 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
-from app.services.model_adapter import FairLensAdapter, SklearnAdapter, CallableAdapter
+from app.services.model_adapter import (
+    FairLensAdapter,
+    SklearnAdapter,
+    CallableAdapter,
+    HuggingFaceAdapter,
+    normalize_hf_token,
+)
 
 
 @pytest.fixture
@@ -84,3 +90,47 @@ def test_pickle_roundtrip(trained_rf, tmp_path):
     adapter = FairLensAdapter.from_pickle(str(pkl_path))
     preds = adapter.predict(X)
     assert len(preds) == len(X)
+
+
+def test_normalize_hf_token_strips_bearer_and_whitespace(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    assert normalize_hf_token("  Bearer hf_test_token  \n") == "hf_test_token"
+
+
+def test_normalize_hf_token_uses_env_fallback(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", " Bearer hf_env_token ")
+    assert normalize_hf_token("") == "hf_env_token"
+
+
+def test_huggingface_adapter_stores_normalized_token():
+    adapter = HuggingFaceAdapter("cardiffnlp/twitter-roberta-base-sentiment-latest", hf_token=" Bearer hf_inline ")
+    assert adapter.hf_token == "hf_inline"
+
+
+def test_from_huggingface_auto_uses_normalized_auth_header(monkeypatch):
+    captured = {}
+
+    class DummyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"pipeline_tag": "text-classification"}
+
+    def fake_get(url, headers, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return DummyResponse()
+
+    import requests
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    adapter = FairLensAdapter.from_huggingface_auto(
+        "cardiffnlp/twitter-roberta-base-sentiment-latest",
+        hf_token=" Bearer hf_header_test ",
+    )
+
+    assert isinstance(adapter, HuggingFaceAdapter)
+    assert adapter.hf_token == "hf_header_test"
+    assert captured["headers"]["Authorization"] == "Bearer hf_header_test"
