@@ -88,31 +88,32 @@ async def _load_huggingface(name: str) -> str:
     async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
 
         # --- Strategy 1: datasets-server /rows ---
-        # Detect the correct config+split. If the info endpoint fails with a non-200,
-        # raise immediately rather than silently proceeding with wrong defaults.
+        # Use /splits (not /info) — it directly returns valid (config, split) pairs,
+        # avoiding the /info dataset_info parsing that silently falls back to "default"
+        # when the real config name differs (e.g. "bias_in_bios" for LabHC/bias_in_bios).
         config, split = "default", "train"
-        info_resp = await _get_with_retry(client, f"{_HF_SERVER}/info?dataset={name}")
-        if info_resp.status_code == 401:
+        splits_resp = await _get_with_retry(client, f"{_HF_SERVER}/splits?dataset={name}")
+        if splits_resp.status_code == 401:
             raise HTTPException(
                 400,
                 f"HuggingFace dataset '{name}' is gated or private. "
                 f"Download the CSV manually from huggingface.co/datasets/{name} and upload it directly."
             )
-        if info_resp.status_code == 404:
+        if splits_resp.status_code == 404:
             raise HTTPException(
                 400,
                 f"HuggingFace dataset '{name}' was not found. "
                 f"Check the dataset name at huggingface.co/datasets."
             )
-        if info_resp.status_code == 200:
-            info = info_resp.json()
-            configs = list(info.get("dataset_info", {}).keys())
-            if configs:
-                config = configs[0]
-            splits = list(info.get("dataset_info", {}).get(config, {}).get("splits", {}).keys())
-            if splits:
-                split = splits[0]
-        # Non-200 other than 401/404 (e.g. 429, 503): fall through and let the rows request fail visibly.
+        if splits_resp.status_code == 200:
+            split_entries = splits_resp.json().get("splits", [])
+            if split_entries:
+                # Prefer a "train" split; otherwise take the first available
+                train_entry = next((s for s in split_entries if s.get("split") == "train"), split_entries[0])
+                config = train_entry.get("config", config)
+                split = train_entry.get("split", split)
+                logger.info(f"[HF] /splits resolved config='{config}' split='{split}' for {name}")
+        # Non-200 other than 401/404: fall through to parquet/file strategies.
 
         rows_resp = await _get_with_retry(
             client,
