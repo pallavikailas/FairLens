@@ -11,14 +11,24 @@ export interface AuditSession {
   llmApiKey: string
   hfToken: string
   protectedCols: string[]
-
   targetCol: string
+
+  // Phase 1 — model probe on embedded reference dataset
+  modelProbeResults: any | null
+  // Phase 2 — dataset-only bias analysis
+  datasetProbeResults: any | null
+  // Phase 3 — cross-analysis (model × user dataset)
+  crossAnalysisResults: any | null
+  // Phase 4 — red-team
+  redteamResults: any | null
+
+  // Legacy fields kept for compatibility with existing result displays
   cartographyResults: any | null
   constitutionResults: any | null
   proxyResults: any | null
-  redteamResults: any | null
+
   confirmedBiases: any[]
-  stage: 'upload' | 'cartography' | 'constitution' | 'proxy' | 'review' | 'redteam' | 'done'
+  stage: 'upload' | 'model_probe' | 'dataset_probe' | 'cross_analysis' | 'review' | 'redteam' | 'done'
   loading: boolean
   error: string | null
 }
@@ -34,10 +44,14 @@ interface AuditStore extends AuditSession {
   setHfToken: (t: string) => void
   setProtectedCols: (cols: string[]) => void
   setTargetCol: (col: string) => void
+  setModelProbeResults: (r: any) => void
+  setDatasetProbeResults: (r: any) => void
+  setCrossAnalysisResults: (r: any) => void
+  setRedteamResults: (r: any) => void
+  // Legacy setters
   setCartographyResults: (r: any) => void
   setConstitutionResults: (r: any) => void
   setProxyResults: (r: any) => void
-  setRedteamResults: (r: any) => void
   setConfirmedBiases: (b: any[]) => void
   setStage: (s: AuditSession['stage']) => void
   setLoading: (v: boolean) => void
@@ -57,10 +71,13 @@ const initial: AuditSession = {
   hfToken: '',
   protectedCols: [],
   targetCol: '',
+  modelProbeResults: null,
+  datasetProbeResults: null,
+  crossAnalysisResults: null,
+  redteamResults: null,
   cartographyResults: null,
   constitutionResults: null,
   proxyResults: null,
-  redteamResults: null,
   confirmedBiases: [],
   stage: 'upload',
   loading: false,
@@ -69,23 +86,26 @@ const initial: AuditSession = {
 
 export const useAuditStore = create<AuditStore>((set) => ({
   ...initial,
-  setModelFile: (modelFile) => set({ modelFile }),
-  setDatasetFile: (datasetFile) => set({ datasetFile }),
-  setDatasetSource: (datasetSource) => set({ datasetSource }),
-  setDatasetUrl: (datasetUrl) => set({ datasetUrl }),
-  setModelType: (modelType) => set({ modelType }),
-  setModelEndpoint: (modelEndpoint) => set({ modelEndpoint }),
-  setLlmApiKey: (llmApiKey) => set({ llmApiKey }),
-  setHfToken: (hfToken) => set({ hfToken }),
-  setProtectedCols: (protectedCols) => set({ protectedCols }),
-  setTargetCol: (targetCol) => set({ targetCol }),
-  setCartographyResults: (cartographyResults) => set({ cartographyResults }),
-  setConstitutionResults: (constitutionResults) => set({ constitutionResults }),
-  setProxyResults: (proxyResults) => set({ proxyResults }),
-  setRedteamResults: (redteamResults) => set({ redteamResults }),
-  setConfirmedBiases: (confirmedBiases) => set({ confirmedBiases }),
-  setStage: (stage) => set({ stage }),
-  setLoading: (loading) => set({ loading }),
-  setError: (error) => set({ error }),
-  reset: () => set(initial),
+  setModelFile:            (modelFile)            => set({ modelFile }),
+  setDatasetFile:          (datasetFile)          => set({ datasetFile }),
+  setDatasetSource:        (datasetSource)        => set({ datasetSource }),
+  setDatasetUrl:           (datasetUrl)           => set({ datasetUrl }),
+  setModelType:            (modelType)            => set({ modelType }),
+  setModelEndpoint:        (modelEndpoint)        => set({ modelEndpoint }),
+  setLlmApiKey:            (llmApiKey)            => set({ llmApiKey }),
+  setHfToken:              (hfToken)              => set({ hfToken }),
+  setProtectedCols:        (protectedCols)        => set({ protectedCols }),
+  setTargetCol:            (targetCol)            => set({ targetCol }),
+  setModelProbeResults:    (modelProbeResults)    => set({ modelProbeResults }),
+  setDatasetProbeResults:  (datasetProbeResults)  => set({ datasetProbeResults }),
+  setCrossAnalysisResults: (crossAnalysisResults) => set({ crossAnalysisResults }),
+  setRedteamResults:       (redteamResults)       => set({ redteamResults }),
+  setCartographyResults:   (cartographyResults)   => set({ cartographyResults }),
+  setConstitutionResults:  (constitutionResults)  => set({ constitutionResults }),
+  setProxyResults:         (proxyResults)         => set({ proxyResults }),
+  setConfirmedBiases:      (confirmedBiases)      => set({ confirmedBiases }),
+  setStage:                (stage)                => set({ stage }),
+  setLoading:              (loading)              => set({ loading }),
+  setError:                (error)                => set({ error }),
+  reset:                   ()                     => set(initial),
 }))
