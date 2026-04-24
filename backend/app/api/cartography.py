@@ -105,15 +105,14 @@ async def analyze_bias_cartography(
                 if "text" not in df_pred.columns:
                     str_cols = df_pred.select_dtypes(include=["object"]).columns.tolist()
                     df_pred["text"] = df_pred[str_cols].fillna("").astype(str).agg(" ".join, axis=1) if str_cols else df_pred.astype(str).agg(" ".join, axis=1)
-                # HF Inference API is slow (~0.5s/call) — sample to keep latency under 90s
-                hf_sample_size = min(150, len(df_pred))
-                sample_idx = df_pred.sample(hf_sample_size, random_state=42).index.tolist()
-                preds_sample = adapter.predict(df_pred.loc[sample_idx].reset_index(drop=True))
-                full_preds = np.zeros(len(df_pred), dtype=int)
-                for i, idx in enumerate(sample_idx):
-                    full_preds[idx] = int(preds_sample[i])
-                model_predictions = full_preds.tolist()
-                logger.info(f"[{audit_id}] HuggingFace classifier '{api_endpoint}' generated predictions on {hf_sample_size} sampled rows")
+                # Sample to cap latency; analyse ONLY the sample so non-sampled rows
+                # don't get zero-filled (which flattens per-group rates and hides bias)
+                hf_sample_size = min(300, len(df_pred))
+                df_sample = df_pred.sample(hf_sample_size, random_state=42).reset_index(drop=True)
+                preds_sample = adapter.predict(df_sample)
+                model_predictions = [int(p) for p in preds_sample]
+                dataset_csv = df_sample.to_csv(index=False)
+                logger.info(f"[{audit_id}] HuggingFace classifier '{api_endpoint}' generated predictions on {hf_sample_size} rows")
             except Exception as e:
                 logger.warning(f"[{audit_id}] HuggingFace model predictions failed: {e} — falling back to dataset labels")
 
@@ -127,14 +126,12 @@ async def analyze_bias_cartography(
                 )
                 df_pred = pd.read_csv(io.StringIO(dataset_csv))
                 feature_cols_pred = [c for c in df_pred.columns if c != target]
-                # Sample LLM calls — slow; bias patterns visible on a subset
-                sample_idx = df_pred[feature_cols_pred].sample(min(100, len(df_pred)), random_state=42).index.tolist()
-                preds_sample = adapter.predict(df_pred.loc[sample_idx, feature_cols_pred].reset_index(drop=True))
-                full_preds = np.full(len(df_pred), 0.5)
-                for i, idx in enumerate(sample_idx):
-                    full_preds[idx] = preds_sample[i]
-                model_predictions = [int(round(p)) for p in full_preds]
-                logger.info(f"[{audit_id}] {model_type} '{api_endpoint}' generated predictions on {len(preds_sample)} sampled rows")
+                sample_size = min(100, len(df_pred))
+                df_sample = df_pred.sample(sample_size, random_state=42).reset_index(drop=True)
+                preds_sample = adapter.predict(df_sample[feature_cols_pred])
+                model_predictions = [int(round(float(p))) for p in preds_sample]
+                dataset_csv = df_sample.to_csv(index=False)
+                logger.info(f"[{audit_id}] {model_type} '{api_endpoint}' generated predictions on {sample_size} sampled rows")
             except Exception as e:
                 logger.warning(f"[{audit_id}] {model_type} model predictions failed: {e} — falling back to dataset labels")
 

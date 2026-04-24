@@ -363,19 +363,32 @@ class HuggingFaceAdapter(BaseModelAdapter):
         else:
             raw = self._query_api(texts)
 
+        # Exact-match sets avoid "NON_TOXIC" matching the "TOXIC" substring check
+        _NEG_LABELS = {
+            "NEG", "NEGATIVE", "LABEL_0", "NON_TOXIC", "NONTOXIC", "NOT_TOXIC",
+            "SAFE", "NOT_HATE", "NOTHATE", "CLEAN", "HAM", "0", "FALSE", "NORMAL",
+            "NON-TOXIC", "NOT TOXIC",
+        }
+        _POS_LABELS = {
+            "POS", "POSITIVE", "LABEL_1", "TOXIC", "HATE", "HARMFUL",
+            "OFFENSIVE", "SPAM", "JUNK", "1", "TRUE", "ABNORMAL",
+        }
+
         probas = []
         for item in raw:
             candidates = item if isinstance(item, list) else [item]
-            # Find the positive-class score
             pos_score = 0.5
             for c in candidates:
-                label = c.get("label", "").upper()
+                label_norm = c.get("label", "").upper().replace("-", "_").replace(" ", "_")
                 score = float(c.get("score", 0.5))
-                if any(k in label for k in ("POS", "LABEL_1", "1", "TOXIC", "HATE", "NEG_DENY")):
+                if label_norm in _NEG_LABELS:
+                    pos_score = 1.0 - score  # negative class → positive prob is complement
+                    break
+                if label_norm in _POS_LABELS:
                     pos_score = score
                     break
             else:
-                # Fall back to highest-scoring label
+                # Unknown labels — use highest-scoring label as positive proxy
                 best = max(candidates, key=lambda c: c.get("score", 0))
                 pos_score = float(best.get("score", 0.5))
             probas.append([1 - pos_score, pos_score])
