@@ -297,6 +297,7 @@ class HuggingFaceAdapter(BaseModelAdapter):
         InferenceClient handles URL routing, auth, and model-type detection correctly,
         avoiding the 404s caused by the new Inference Providers API path changes.
         """
+        fallback_to_raw_http = False
         try:
             from huggingface_hub import InferenceClient
             client = InferenceClient(
@@ -313,10 +314,10 @@ class HuggingFaceAdapter(BaseModelAdapter):
                 except Exception as item_err:
                     err_str = str(item_err).lower()
                     if "401" in err_str or "403" in err_str or "unauthorized" in err_str or "forbidden" in err_str:
-                        raise ValueError(
-                            f"HuggingFace model '{self.model_name}' requires authentication. "
-                            "Check that your HF token is correct (huggingface.co/settings/tokens)."
-                        )
+                        # InferenceClient may fail auth/provider lookup for some gated
+                        # or provider-routed models even when direct bearer-auth HTTP works.
+                        fallback_to_raw_http = True
+                        break
                     if "404" in err_str or "not found" in err_str:
                         raise ValueError(
                             f"HuggingFace model '{self.model_name}' not found or not available "
@@ -328,7 +329,8 @@ class HuggingFaceAdapter(BaseModelAdapter):
                         )
                     logger.warning(f"[HF] per-item inference error: {item_err}")
                     results.append([{"label": "UNKNOWN", "score": 0.5}])
-            return results
+            if not fallback_to_raw_http:
+                return results
 
         except (ImportError, ModuleNotFoundError):
             pass  # huggingface_hub not installed — fall through to raw HTTP

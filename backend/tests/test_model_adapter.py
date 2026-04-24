@@ -154,3 +154,49 @@ def test_generative_hf_429_is_raised_as_actionable_value_error(monkeypatch):
 
     with pytest.raises(ValueError, match="rate limit reached"):
         adapter.predict_proba(pd.DataFrame({"text": ["hello world"]}))
+
+
+def test_classifier_hf_auth_error_falls_back_to_raw_http(monkeypatch):
+    adapter = HuggingFaceAdapter(
+        "Hate-speech-CNERG/dehatebert-mono-english",
+        hf_token="hf_test",
+    )
+
+    class FakeInferenceClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def text_classification(self, *args, **kwargs):
+            raise Exception("401 Unauthorized")
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return [[{"label": "LABEL_1", "score": 0.91}]]
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    import huggingface_hub
+    import requests
+
+    captured = {}
+
+    def fake_post(url, json, headers, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(huggingface_hub, "InferenceClient", FakeInferenceClient)
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    probs = adapter.predict_proba(pd.DataFrame({"text": ["hello world"]}))
+
+    assert probs.shape == (1, 2)
+    assert probs[0, 1] == pytest.approx(0.91)
+    assert captured["headers"]["Authorization"] == "Bearer hf_test"
