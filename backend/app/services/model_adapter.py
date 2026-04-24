@@ -38,6 +38,7 @@ from __future__ import annotations
 import abc
 import json
 import logging
+import os
 from typing import Any, Callable, Optional, List
 
 import numpy as np
@@ -45,6 +46,25 @@ import pandas as pd
 import shap
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_hf_token(token: str = "") -> str:
+    """
+    Normalise Hugging Face tokens coming from UI forms or env vars.
+
+    Users often paste tokens with a leading "Bearer " prefix or trailing
+    newlines/spaces; Hugging Face clients expect just the raw `hf_...` token.
+    """
+    raw = (token or "").strip()
+    if not raw:
+        raw = (
+            os.getenv("HF_TOKEN", "").strip()
+            or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+            or os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
+        )
+    if raw.lower().startswith("bearer "):
+        raw = raw.split(None, 1)[1].strip() if len(raw.split(None, 1)) > 1 else ""
+    return raw
 
 
 # ── Abstract base ─────────────────────────────────────────────────────────────
@@ -257,7 +277,7 @@ class HuggingFaceAdapter(BaseModelAdapter):
             self.model_name = getattr(model_name, "model", "unknown")
             self._pipeline = model_name
         self.task = task
-        self.hf_token = hf_token
+        self.hf_token = normalize_hf_token(hf_token)
 
     @staticmethod
     def _to_text(X: pd.DataFrame) -> list[str]:
@@ -450,7 +470,7 @@ class GenerativeLLMAdapter(BaseModelAdapter):
         self.backend = backend
         self.model_name = model_name
         self.api_key = api_key
-        self.hf_token = hf_token
+        self.hf_token = normalize_hf_token(hf_token)
         self.prompt_template = prompt_template or self._DEFAULT_PROMPT
         self.max_new_tokens = max_new_tokens
         self.positive_threshold = positive_threshold
@@ -833,6 +853,7 @@ class FairLensAdapter:
         by querying the HuggingFace Hub API, then return the right adapter.
         """
         import requests
+        hf_token = normalize_hf_token(hf_token)
         headers = {"Content-Type": "application/json"}
         if hf_token:
             headers["Authorization"] = f"Bearer {hf_token}"
