@@ -21,6 +21,8 @@ async def run_redteam(
     target_col: str = Form(...),
     confirmed_biases: str = Form(..., description="JSON list of confirmed bias objects"),
     audit_results: str = Form(..., description="JSON of combined audit results"),
+    model_probe_biases: str = Form(default="[]", description="JSON list of biases from Phase 1 model probe"),
+    dataset_probe_biases: str = Form(default="[]", description="JSON list of biases from Phase 2 dataset probe"),
     dataset_source: str = Form(default="upload"),
     dataset_url: str = Form(default=""),
     model_type: str = Form(default="sklearn"),
@@ -123,11 +125,32 @@ async def run_redteam(
     except Exception as e:
         raise HTTPException(400, f"confirmed_biases is not valid JSON: {e}")
 
+    # Merge Phase 1 (model probe) + Phase 2 (dataset probe) biases into confirmed list
+    try:
+        mp_biases = json.loads(model_probe_biases) if model_probe_biases else []
+        ds_biases = json.loads(dataset_probe_biases) if dataset_probe_biases else []
+    except Exception:
+        mp_biases = []
+        ds_biases = []
+
+    # Deduplicate: add probe biases not already in user-confirmed list
+    confirmed_attrs = {b.get("attribute") for b in biases}
+    for b in mp_biases + ds_biases:
+        if b.get("attribute") and b["attribute"] not in confirmed_attrs:
+            biases.append(b)
+            confirmed_attrs.add(b["attribute"])
+
     # audit_results is optional context — the agent nodes don't need the full output
     try:
         audit = json.loads(audit_results) if audit_results else {}
     except Exception:
         audit = {}
+
+    # Surface model probe cartography data for the fallback evaluator
+    if mp_biases and "model_probe" not in audit:
+        audit["model_probe"] = {"biases": mp_biases}
+    if ds_biases and "dataset_probe" not in audit:
+        audit["dataset_probe"] = {"biases": ds_biases}
 
     audit_id = str(uuid.uuid4())[:8]
 

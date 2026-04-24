@@ -102,10 +102,15 @@ export default function RedTeamPage() {
     setAllLogs([]); setDoneNodes(new Set()); setFinalResults(null)
 
     const auditResults = {
-      cartography: store.cartographyResults,
-      constitution: store.constitutionResults,
-      proxy: store.proxyResults,
+      crossAnalysis: store.crossAnalysisResults,
+      cartography:   store.cartographyResults,
+      constitution:  store.constitutionResults,
+      proxy:         store.proxyResults,
     }
+
+    // Biases from Phase 1 (model probe) + Phase 2 (dataset probe) — sent to redteam separately
+    const modelProbeBiases   = store.modelProbeResults?.model_biases   ?? []
+    const datasetProbeBiases = store.datasetProbeResults?.dataset_biases ?? []
 
     const stop = streamRedTeam(
       store.modelFile,
@@ -136,6 +141,8 @@ export default function RedTeamPage() {
       store.modelEndpoint,
       store.llmApiKey,
       store.hfToken,
+      modelProbeBiases,
+      datasetProbeBiases,
     )
     stopRef.current = stop
   }

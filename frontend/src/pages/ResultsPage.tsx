@@ -346,19 +346,22 @@ function SeverityBadge({ level }: { level: string }) {
 export default function ResultsPage() {
   const nav = useNavigate()
   const store = useAuditStore()
-  const [activeTab, setActiveTab] = useState<'cartography' | 'constitution' | 'proxy'>('cartography')
+  const [activeTab, setActiveTab] = useState<'cartography' | 'constitution' | 'proxy' | 'model_probe' | 'dataset_probe' | 'cross_synthesis'>('model_probe')
   const [selectedBiases, setSelectedBiases] = useState<Set<string>>(new Set())
   const [downloading, setDownloading] = useState(false)
 
   const downloadReport = async () => {
-    if (!store.cartographyResults) return
+    if (!store.crossAnalysisResults && !store.cartographyResults) return
     setDownloading(true)
     try {
       const fullReport = {
-        ...store.cartographyResults,
-        constitution: store.constitutionResults ?? null,
-        proxy_hunt: store.proxyResults ?? null,
-        redteam: store.redteamResults ?? null,
+        ...(store.crossAnalysisResults?.cartography ?? store.cartographyResults),
+        constitution:     store.crossAnalysisResults?.constitution ?? store.constitutionResults ?? null,
+        proxy_hunt:       store.crossAnalysisResults?.proxy ?? store.proxyResults ?? null,
+        model_probe:      store.modelProbeResults ?? null,
+        dataset_probe:    store.datasetProbeResults ?? null,
+        cross_synthesis:  store.crossAnalysisResults?.cross_synthesis ?? null,
+        redteam:          store.redteamResults ?? null,
       }
       await exportPdfReport(fullReport)
     } catch (e: any) {
@@ -368,11 +371,18 @@ export default function ResultsPage() {
     }
   }
 
-  const carto = store.cartographyResults
-  const constitution = store.constitutionResults
-  const proxy = store.proxyResults
+  // Phase results
+  const modelProbe   = store.modelProbeResults
+  const datasetProbe = store.datasetProbeResults
+  const crossResult  = store.crossAnalysisResults
 
-  if (!carto) {
+  // Cross-analysis stages (Phase 3)
+  const carto        = crossResult?.cartography ?? store.cartographyResults
+  const constitution = crossResult?.constitution ?? store.constitutionResults
+  const proxy        = crossResult?.proxy ?? store.proxyResults
+  const crossSynth   = crossResult?.cross_synthesis
+
+  if (!carto && !modelProbe && !datasetProbe) {
     return (
       <div className="max-w-3xl mx-auto px-6 py-24 text-center">
         <div className="text-white/30 text-sm font-mono mb-4">No audit results found.</div>
@@ -387,22 +397,54 @@ export default function ResultsPage() {
     setSelectedBiases(next)
   }
 
-  const confirmedBiases = [
+  // Biases from Phase 1 (model probe)
+  const modelProbeBiases: any[] = modelProbe?.model_biases ?? []
+  // Biases from Phase 2 (dataset probe)
+  const datasetProbeBiases: any[] = datasetProbe?.dataset_biases ?? []
+
+  // Full confirmed bias list across all phases
+  const allBiases = [
+    // Phase 1 — model probe biases
+    ...modelProbeBiases.map((b: any) => ({
+      attribute: b.attribute,
+      type:      b.type,
+      label:     `[Model Probe] ${b.value || b.attribute}`,
+      magnitude: b.magnitude,
+      source:    'model_probe',
+      _raw:      b,
+    })),
+    // Phase 2 — dataset probe biases
+    ...datasetProbeBiases.map((b: any) => ({
+      attribute: b.attribute,
+      type:      b.type,
+      label:     `[Dataset Probe] ${b.value || b.attribute}`,
+      magnitude: b.magnitude,
+      source:    'dataset_probe',
+      _raw:      b,
+    })),
+    // Phase 3 — cross-analysis flagged slices
     ...(carto?.slice_metrics?.filter((m: any) => m.flagged).map((m: any) => ({
       attribute: m.attribute || 'unknown',
-      type: 'demographic_parity',
-      label: m.label,
-      spd: m.statistical_parity_diff,
-    })) || []),
+      type:      'demographic_parity',
+      label:     `[Cross-Analysis] ${m.label}`,
+      spd:       m.statistical_parity_diff,
+      magnitude: Math.abs(m.statistical_parity_diff),
+      source:    'cross_analysis',
+      _raw:      m,
+    })) ?? []),
+    // Phase 3 — high-risk proxy chains
     ...(proxy?.proxy_chains?.filter((c: any) => c.risk_level === 'critical' || c.risk_level === 'high').map((c: any) => ({
       attribute: c.start_feature,
-      type: 'proxy',
-      label: c.explanation,
-      chain: c.path,
-    })) || []),
+      type:      'proxy',
+      label:     `[Proxy] ${c.explanation ?? c.path?.join(' → ')}`,
+      chain:     c.path,
+      magnitude: c.risk_score ?? 0,
+      source:    'cross_analysis_proxy',
+      _raw:      c,
+    })) ?? []),
   ]
 
-  const selectedList = confirmedBiases.filter((b: any) => selectedBiases.has(b.label || b.attribute))
+  const selectedList = allBiases.filter((b: any) => selectedBiases.has(b.label))
 
   const proceedToRedTeam = () => {
     store.setConfirmedBiases(selectedList)
@@ -425,9 +467,12 @@ export default function ResultsPage() {
   })()
 
   const TABS = [
-    { key: 'cartography', label: 'Bias Map', count: carto?.slice_metrics?.filter((m: any) => m.flagged)?.length ?? carto?.hotspots?.length ?? 0 },
-    { key: 'constitution', label: 'Constitution', count: constitution?.patterns?.length ?? constitution?.summary?.decision_flips ?? 0 },
-    { key: 'proxy', label: 'Proxy Chains', count: highRiskProxies },
+    { key: 'model_probe',  label: 'Phase 1 — Model',   count: modelProbeBiases.length },
+    { key: 'dataset_probe', label: 'Phase 2 — Dataset', count: datasetProbeBiases.length },
+    { key: 'cross_synthesis', label: 'Phase 3 — Cross', count: crossSynth?.summary?.total_compounded_risks ?? 0 },
+    { key: 'cartography', label: 'Bias Map',    count: carto?.slice_metrics?.filter((m: any) => m.flagged)?.length ?? 0 },
+    { key: 'constitution', label: 'Constitution', count: constitution?.patterns?.length ?? 0 },
+    { key: 'proxy',        label: 'Proxy Chains', count: highRiskProxies },
   ]
 
   return (
@@ -525,6 +570,184 @@ export default function ResultsPage() {
       <AnimatePresence mode="wait">
         <motion.div key={activeTab} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}
           className="mb-10">
+
+          {/* ── Phase 1: Model Probe ───────────────────────────────────────── */}
+          {activeTab === 'model_probe' && (
+            <div className="space-y-4">
+              {modelProbe ? (
+                <>
+                  <div className="grid md:grid-cols-3 gap-4">
+                    <div className="glass rounded-2xl p-5 border border-lens/15">
+                      <div className="text-xs font-mono text-white/40 mb-2">Model FairScore™ (Reference Dataset)</div>
+                      <div className={`font-display font-bold text-4xl ${
+                        (modelProbe.summary?.fair_score?.color === 'green') ? 'text-green-400' :
+                        (modelProbe.summary?.fair_score?.color === 'yellow') ? 'text-yellow-400' : 'text-red-400'
+                      }`}>{modelProbe.summary?.fair_score?.score ?? '—'}</div>
+                      <div className="text-white/30 text-xs mt-1">{modelProbe.summary?.fair_score?.label} · {modelProbe.reference_dataset_size} reference rows</div>
+                    </div>
+                    <div className="glass rounded-2xl p-5 border border-white/5">
+                      <div className="text-xs font-mono text-white/40 mb-2">Hidden Biases Detected</div>
+                      <div className="text-signal-red font-display font-bold text-4xl">{modelProbeBiases.length}</div>
+                      <div className="text-white/30 text-xs mt-1">intrinsic model biases</div>
+                    </div>
+                    <div className="glass rounded-2xl p-5 border border-white/5">
+                      <div className="text-xs font-mono text-white/40 mb-2">Most Biased Attribute</div>
+                      <div className="text-lens-light font-display font-bold text-xl">{modelProbe.summary?.most_biased_attribute ?? '—'}</div>
+                      <div className="text-white/30 text-xs mt-1">on reference probe</div>
+                    </div>
+                  </div>
+                  <div className="glass rounded-2xl p-5 border border-white/5">
+                    <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Detected Model Biases</div>
+                    <div className="space-y-2">
+                      {modelProbeBiases.map((b: any, i: number) => (
+                        <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-white/2 border border-white/5">
+                          <div>
+                            <span className="text-white/80 text-xs font-mono font-semibold">{b.attribute}</span>
+                            <span className="text-white/40 text-xs ml-2">{b.value}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-white/30 text-xs font-mono">magnitude {b.magnitude?.toFixed(3)}</span>
+                            <SeverityBadge level={b.severity} />
+                          </div>
+                        </div>
+                      ))}
+                      {modelProbeBiases.length === 0 && <div className="text-white/20 text-sm font-mono text-center py-4">No hidden biases detected in model probe</div>}
+                    </div>
+                  </div>
+                  {modelProbe.cartography?.gemini_analysis?.headline && (
+                    <div className="glass rounded-2xl p-5 border border-lens/15">
+                      <div className="text-xs font-mono text-lens-light mb-2">Gemini Analysis — Model Probe</div>
+                      <p className="text-white/80 text-sm mb-2">{modelProbe.cartography.gemini_analysis.headline}</p>
+                      <ul className="space-y-1">
+                        {modelProbe.cartography.gemini_analysis.key_findings?.map((f: string, i: number) => (
+                          <li key={i} className="text-white/50 text-xs font-mono flex gap-2"><span className="text-lens-light">›</span>{f}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="glass rounded-2xl p-8 text-center text-white/30 text-sm font-mono border border-white/5">
+                  Model probe results not available
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Phase 2: Dataset Probe ─────────────────────────────────────── */}
+          {activeTab === 'dataset_probe' && (
+            <div className="space-y-4">
+              {datasetProbe ? (
+                <>
+                  <div className="grid md:grid-cols-3 gap-4">
+                    <div className="glass rounded-2xl p-5 border border-lens/15">
+                      <div className="text-xs font-mono text-white/40 mb-2">Dataset FairScore™ (No Model)</div>
+                      <div className={`font-display font-bold text-4xl ${
+                        (datasetProbe.summary?.fair_score?.color === 'green') ? 'text-green-400' :
+                        (datasetProbe.summary?.fair_score?.color === 'yellow') ? 'text-yellow-400' : 'text-red-400'
+                      }`}>{datasetProbe.summary?.fair_score?.score ?? '—'}</div>
+                      <div className="text-white/30 text-xs mt-1">{datasetProbe.summary?.fair_score?.label}</div>
+                    </div>
+                    <div className="glass rounded-2xl p-5 border border-white/5">
+                      <div className="text-xs font-mono text-white/40 mb-2">Dataset Biases</div>
+                      <div className="text-signal-amber font-display font-bold text-4xl">{datasetProbeBiases.length}</div>
+                      <div className="text-white/30 text-xs mt-1">structural biases in data</div>
+                    </div>
+                    <div className="glass rounded-2xl p-5 border border-white/5">
+                      <div className="text-xs font-mono text-white/40 mb-2">Critical Proxy Chains</div>
+                      <div className="text-signal-red font-display font-bold text-4xl">{datasetProbe.summary?.critical_proxies ?? 0}</div>
+                      <div className="text-white/30 text-xs mt-1">out of {datasetProbe.summary?.proxy_count ?? 0} total</div>
+                    </div>
+                  </div>
+                  <div className="glass rounded-2xl p-5 border border-white/5">
+                    <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Detected Dataset Biases</div>
+                    <div className="space-y-2">
+                      {datasetProbeBiases.map((b: any, i: number) => (
+                        <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-white/2 border border-white/5">
+                          <div>
+                            <span className="text-white/80 text-xs font-mono font-semibold">{b.attribute}</span>
+                            <span className="text-white/40 text-xs ml-2">{b.type === 'proxy_chain' ? `→ ${b.value}` : b.value}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-white/30 text-xs font-mono">magnitude {b.magnitude?.toFixed(3)}</span>
+                            <SeverityBadge level={b.severity} />
+                          </div>
+                        </div>
+                      ))}
+                      {datasetProbeBiases.length === 0 && <div className="text-white/20 text-sm font-mono text-center py-4">No structural biases detected in dataset probe</div>}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="glass rounded-2xl p-8 text-center text-white/30 text-sm font-mono border border-white/5">
+                  Dataset probe results not available
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Phase 3: Cross-Analysis Synthesis ─────────────────────────── */}
+          {activeTab === 'cross_synthesis' && (
+            <div className="space-y-4">
+              {crossSynth ? (
+                <>
+                  {crossSynth.gemini_analysis?.headline && (
+                    <div className="glass rounded-2xl p-5 border border-lens/20">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-lens-light text-xs font-mono font-semibold">Cross-Analysis AI Synthesis</span>
+                        <SeverityBadge level={crossSynth.gemini_analysis.severity} />
+                      </div>
+                      <p className="text-white/80 text-sm mb-2">{crossSynth.gemini_analysis.headline}</p>
+                      {crossSynth.gemini_analysis.interaction_mechanism && (
+                        <p className="text-white/50 text-xs mb-3">{crossSynth.gemini_analysis.interaction_mechanism}</p>
+                      )}
+                      <ul className="space-y-1">
+                        {crossSynth.gemini_analysis.key_findings?.map((f: string, i: number) => (
+                          <li key={i} className="text-white/50 text-xs font-mono flex gap-2"><span className="text-lens-light">›</span>{f}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <div className="grid md:grid-cols-3 gap-4">
+                    {[
+                      { label: 'Aligned Biases', value: crossSynth.summary?.aligned_count, desc: 'in both model & dataset', color: 'text-signal-red' },
+                      { label: 'Proxy Amplifications', value: crossSynth.summary?.proxy_amplification_count, desc: 'proxy → biased attribute', color: 'text-signal-amber' },
+                      { label: 'Blind Spots', value: crossSynth.summary?.blind_spot_count, desc: 'one-sided bias', color: 'text-lens-light' },
+                    ].map((c, i) => (
+                      <div key={i} className="glass rounded-2xl p-5 border border-white/5">
+                        <div className="text-xs font-mono text-white/40 mb-1">{c.label}</div>
+                        <div className={`font-display font-bold text-3xl ${c.color}`}>{c.value ?? '—'}</div>
+                        <div className="text-white/25 text-xs mt-1">{c.desc}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {crossSynth.risk_matrix?.length > 0 && (
+                    <div className="glass rounded-2xl p-5 border border-white/5">
+                      <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Risk Matrix</div>
+                      <div className="space-y-2">
+                        {crossSynth.risk_matrix.map((r: any, i: number) => (
+                          <div key={i} className="p-3 rounded-xl bg-white/2 border border-white/5">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-white/80 text-xs font-mono font-semibold">{r.attribute}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-white/30 text-xs font-mono">{r.risk_type}</span>
+                                <SeverityBadge level={r.severity} />
+                              </div>
+                            </div>
+                            <p className="text-white/40 text-xs">{r.description}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="glass rounded-2xl p-8 text-center text-white/30 text-sm font-mono border border-white/5">
+                  Cross-analysis synthesis not available
+                </div>
+              )}
+            </div>
+          )}
 
           {activeTab === 'cartography' && (
             <div className="space-y-4">
@@ -662,7 +885,7 @@ export default function ResultsPage() {
         </p>
 
         <div className="space-y-2 mb-6">
-          {confirmedBiases.map((b: any, i: number) => {
+          {allBiases.map((b: any, i: number) => {
             const key = b.label || b.attribute
             const checked = selectedBiases.has(key)
             return (
@@ -683,7 +906,7 @@ export default function ResultsPage() {
               </button>
             )
           })}
-          {confirmedBiases.length === 0 && (
+          {allBiases.length === 0 && (
             <div className="text-white/20 text-sm font-mono text-center py-6">
               No flagged biases found — your model looks fair!
             </div>

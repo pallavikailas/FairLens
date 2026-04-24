@@ -3,7 +3,7 @@ import { useDropzone } from 'react-dropzone'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuditStore } from '../hooks/useAuditStore'
-import { runCartography, runConstitution, runProxyHunter } from '../utils/api'
+import { runModelProbe, runDatasetProbe, runCrossAnalysis } from '../utils/api'
 
 // ── Model type config ──────────────────────────────────────────────────────
 const MODEL_TYPES = [
@@ -19,13 +19,41 @@ type ModelType = typeof MODEL_TYPES[number]['id']
 
 // ── Dataset source config ──────────────────────────────────────────────────
 const DATASET_SOURCES = [
-  { id: 'upload',     icon: '📂', label: 'Upload CSV',         desc: 'Upload from your device' },
-  { id: 'url',        icon: '🔗', label: 'URL',                desc: 'Direct link to a CSV file' },
-  { id: 'huggingface',icon: '🤗', label: 'HuggingFace Dataset',desc: 'Dataset name from HuggingFace Hub' },
-  { id: 'kaggle',     icon: '📊', label: 'Kaggle Dataset',     desc: 'Kaggle dataset path (owner/dataset)' },
+  { id: 'upload',      icon: '📂', label: 'Upload CSV',          desc: 'Upload from your device' },
+  { id: 'url',         icon: '🔗', label: 'URL',                 desc: 'Direct link to a CSV file' },
+  { id: 'huggingface', icon: '🤗', label: 'HuggingFace Dataset', desc: 'Dataset name from HuggingFace Hub' },
+  { id: 'kaggle',      icon: '📊', label: 'Kaggle Dataset',      desc: 'Kaggle dataset path (owner/dataset)' },
 ] as const
 
 type DatasetSource = typeof DATASET_SOURCES[number]['id']
+
+// ── Pipeline phases for progress display ────────────────────────────────────
+const PHASES = [
+  {
+    id: 'model_probe',
+    label: 'Model Probe',
+    desc: 'Checking model for hidden biases on reference dataset',
+    icon: '🔬',
+  },
+  {
+    id: 'dataset_probe',
+    label: 'Dataset Analysis',
+    desc: 'Analyzing dataset for structural biases & proxy chains',
+    icon: '📊',
+  },
+  {
+    id: 'cross_analysis',
+    label: 'Cross-Analysis',
+    desc: 'Grouping model × dataset biases — finding interaction risks',
+    icon: '⚡',
+  },
+  {
+    id: 'review',
+    label: 'Review & Red-Team',
+    desc: 'Confirm findings then run adversarial remediation',
+    icon: '🎯',
+  },
+]
 
 function DropZone({ file, onDrop }: { file: File | null; onDrop: (f: File[]) => void }) {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -68,31 +96,33 @@ function DatasetDropZone({ file, onDrop }: { file: File | null; onDrop: (f: File
 }
 
 export default function AuditPage() {
-  const nav = useNavigate()
+  const nav   = useNavigate()
   const store = useAuditStore()
-  const [modelType, setModelType] = useState<ModelType>('sklearn')
-  const [datasetSource, setDatasetSource] = useState<DatasetSource>('upload')
-  const [apiEndpoint, setApiEndpoint] = useState('')
-  const [hfModel, setHfModel] = useState('')
-  const [hfToken, setHfToken] = useState('')
-  const [openaiModel, setOpenaiModel] = useState('gpt-4o')
-  const [openaiKey, setOpenaiKey] = useState('')
-  const [geminiModel, setGeminiModel] = useState('gemini-2.0-flash')
-  const [geminiKey, setGeminiKey] = useState('')
-  const [vertexEndpoint, setVertexEndpoint] = useState('')
-  const [gcpProject, setGcpProject] = useState('')
-  const [datasetUrl, setDatasetUrl] = useState('')
-  const [hfDataset, setHfDataset] = useState('')
-  const [kaggleDataset, setKaggleDataset] = useState('')
-  const [runningStage, setRunningStage] = useState<string | null>(null)
-  const [progress, setProgress] = useState(0)
 
-  const onDropModel = useCallback((files: File[]) => { if (files[0]) store.setModelFile(files[0]) }, [])
+  const [modelType, setModelType]       = useState<ModelType>('sklearn')
+  const [datasetSource, setDatasetSource] = useState<DatasetSource>('upload')
+  const [apiEndpoint, setApiEndpoint]   = useState('')
+  const [hfModel, setHfModel]           = useState('')
+  const [hfToken, setHfToken]           = useState('')
+  const [openaiModel, setOpenaiModel]   = useState('gpt-4o')
+  const [openaiKey, setOpenaiKey]       = useState('')
+  const [geminiModel, setGeminiModel]   = useState('gemini-2.0-flash')
+  const [geminiKey, setGeminiKey]       = useState('')
+  const [vertexEndpoint, setVertexEndpoint] = useState('')
+  const [gcpProject, setGcpProject]     = useState('')
+  const [datasetUrl, setDatasetUrl]     = useState('')
+  const [hfDataset, setHfDataset]       = useState('')
+  const [kaggleDataset, setKaggleDataset] = useState('')
+  const [activePhase, setActivePhase]   = useState<string | null>(null)
+  const [completedPhases, setCompletedPhases] = useState<string[]>([])
+  const [progress, setProgress]         = useState(0)
+
+  const onDropModel   = useCallback((files: File[]) => { if (files[0]) store.setModelFile(files[0]) }, [])
   const onDropDataset = useCallback((files: File[]) => { if (files[0]) store.setDatasetFile(files[0]) }, [])
 
   const datasetReady = datasetSource === 'upload'
     ? !!store.datasetFile
-    : datasetSource === 'url' ? !!datasetUrl
+    : datasetSource === 'url'        ? !!datasetUrl
     : datasetSource === 'huggingface' ? !!hfDataset
     : !!kaggleDataset
 
@@ -102,96 +132,96 @@ export default function AuditPage() {
     if (!canRun) return
     store.setError(null)
     store.setLoading(true)
+    setCompletedPhases([])
 
     try {
-      setRunningStage('Bias Cartography'); setProgress(10)
-      store.setStage('cartography')
-
-      // Resolve dataset URL for non-upload sources
       const resolvedDatasetUrl = datasetUrl || hfDataset || kaggleDataset || ''
 
-      // Persist dataset source info to store so RedTeamPage can forward them
       store.setDatasetSource(datasetSource)
       store.setDatasetUrl(resolvedDatasetUrl)
 
-      // Resolve model identifier and credentials for the selected model type
       const modelEndpoint =
         modelType === 'huggingface' ? hfModel :
-        modelType === 'openai'     ? openaiModel :
-        modelType === 'gemini_llm' ? geminiModel :
+        modelType === 'openai'      ? openaiModel :
+        modelType === 'gemini_llm'  ? geminiModel :
         apiEndpoint
 
       const resolvedLlmKey =
         modelType === 'openai'     ? openaiKey :
         modelType === 'gemini_llm' ? geminiKey : ''
 
-      // Build extra params for model type and dataset source
-      const extraParams = {
-        model_type: modelType,
-        api_endpoint: modelEndpoint,
-        vertex_endpoint_id: vertexEndpoint,
-        gcp_project: gcpProject,
-        dataset_source: datasetSource,
-        dataset_url: resolvedDatasetUrl,
-        llm_api_key: resolvedLlmKey,
-        hf_token: hfToken,
-      }
-
-      const carto = await runCartography(
-        store.modelFile,
-        store.datasetFile,
-        ['auto'],
-        'auto',
-        extraParams,
-      )
-      store.setCartographyResults(carto)
-
-      // Persist model credentials so RedTeamPage can access them
       store.setModelType(modelType)
       store.setModelEndpoint(modelEndpoint)
       store.setLlmApiKey(resolvedLlmKey)
       store.setHfToken(hfToken)
 
-      // Extract detected columns from response into LOCAL variables to avoid
-      // the Zustand stale-closure issue (store.* still holds pre-render values).
-      const detectedProtectedCols: string[] = carto.detected_protected_cols?.length
-        ? carto.detected_protected_cols
-        : ['auto']
-      const detectedTargetCol: string = carto.detected_target_col || 'auto'
+      // ── Phase 1: Model Probe (embedded reference dataset) ─────────────────
+      setActivePhase('model_probe')
+      store.setStage('model_probe')
+      setProgress(5)
 
-      // Persist to store for downstream pages
-      store.setProtectedCols(detectedProtectedCols)
-      store.setTargetCol(detectedTargetCol)
-      setProgress(40)
-
-      setRunningStage('Counterfactual Constitution')
-      store.setStage('constitution')
-      // Pass local variables — not store.* — to avoid stale closure
-      const constitution = await runConstitution(
+      const modelProbe = await runModelProbe(
         store.modelFile,
-        store.datasetFile,
-        detectedProtectedCols,
-        detectedTargetCol,
-        carto,
-        datasetSource,
-        resolvedDatasetUrl,
         modelType,
         modelEndpoint,
         resolvedLlmKey,
         hfToken,
       )
-      store.setConstitutionResults(constitution); setProgress(70)
+      store.setModelProbeResults(modelProbe)
+      setCompletedPhases(p => [...p, 'model_probe'])
+      setProgress(30)
 
-      setRunningStage('Proxy Variable Hunter')
-      store.setStage('proxy')
-      const proxy = await runProxyHunter(
+      // ── Phase 2: Dataset Probe (user dataset, no model) ───────────────────
+      setActivePhase('dataset_probe')
+      store.setStage('dataset_probe')
+
+      const datasetProbe = await runDatasetProbe(
         store.datasetFile,
-        detectedProtectedCols,
-        detectedTargetCol,
+        ['auto'],
+        'auto',
         datasetSource,
         resolvedDatasetUrl,
       )
-      store.setProxyResults(proxy); setProgress(100)
+      store.setDatasetProbeResults(datasetProbe)
+
+      // Persist detected columns so Phase 3 + red-team can use them
+      const detectedProtectedCols: string[] = datasetProbe.detected_protected_cols?.length
+        ? datasetProbe.detected_protected_cols
+        : ['auto']
+      const detectedTargetCol: string = datasetProbe.detected_target_col || 'auto'
+      store.setProtectedCols(detectedProtectedCols)
+      store.setTargetCol(detectedTargetCol)
+
+      setCompletedPhases(p => [...p, 'dataset_probe'])
+      setProgress(60)
+
+      // ── Phase 3: Cross-Analysis (model × user dataset) ───────────────────
+      setActivePhase('cross_analysis')
+      store.setStage('cross_analysis')
+
+      const crossAnalysis = await runCrossAnalysis(
+        modelProbe,
+        datasetProbe,
+        store.modelFile,
+        store.datasetFile,
+        modelType,
+        modelEndpoint,
+        resolvedLlmKey,
+        hfToken,
+        datasetSource,
+        resolvedDatasetUrl,
+        detectedProtectedCols,
+        detectedTargetCol,
+      )
+      store.setCrossAnalysisResults(crossAnalysis)
+
+      // Mirror into legacy fields so existing ResultsPage components keep working
+      store.setCartographyResults(crossAnalysis.cartography)
+      store.setConstitutionResults(crossAnalysis.constitution)
+      store.setProxyResults(crossAnalysis.proxy)
+
+      setCompletedPhases(p => [...p, 'cross_analysis'])
+      setProgress(100)
 
       store.setStage('review')
       nav('/results')
@@ -199,22 +229,46 @@ export default function AuditPage() {
       store.setError(e.message)
     } finally {
       store.setLoading(false)
-      setRunningStage(null)
+      setActivePhase(null)
     }
   }
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-12">
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="mb-10">
-        <div className="text-xs font-mono text-lens-light mb-2">Step 1 of 6</div>
+        <div className="text-xs font-mono text-lens-light mb-2">Step 1 of 4</div>
         <h1 className="font-display font-bold text-white text-3xl mb-2">Configure Audit</h1>
         <p className="text-white/40 text-sm">
-          Upload or connect your data. FairLens automatically detects protected attributes and
-          tells you exactly what biases exist — no manual configuration needed.
+          Connect your model and dataset. FairLens runs a 3-phase bias analysis — probing
+          the model, analyzing the dataset, and cross-checking both — before targeted red-teaming.
         </p>
       </motion.div>
 
-      {/* ── Dataset Source ──────────────────────────────────────────────── */}
+      {/* ── Pipeline phases preview ────────────────────────────────────────── */}
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.02 }}
+        className="grid grid-cols-2 gap-2 mb-8">
+        {PHASES.map((phase, i) => {
+          const done    = completedPhases.includes(phase.id)
+          const running = activePhase === phase.id
+          return (
+            <div key={phase.id} className={`rounded-xl p-3 border transition-all
+              ${running  ? 'border-lens/50 bg-lens/10' :
+                done     ? 'border-signal-green/30 bg-signal-green/5' :
+                           'border-white/8 bg-white/2'}`}>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-base">{done ? '✓' : phase.icon}</span>
+                <span className={`text-xs font-mono font-semibold
+                  ${running ? 'text-lens-light' : done ? 'text-signal-green' : 'text-white/50'}`}>
+                  Phase {i + 1} — {phase.label}
+                </span>
+              </div>
+              <p className="text-white/30 text-xs leading-relaxed">{phase.desc}</p>
+            </div>
+          )
+        })}
+      </motion.div>
+
+      {/* ── Dataset Source ──────────────────────────────────────────────────── */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="mb-6">
         <h3 className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Dataset Source</h3>
         <div className="grid grid-cols-2 gap-2 mb-4">
@@ -262,9 +316,11 @@ export default function AuditPage() {
         </AnimatePresence>
       </motion.div>
 
-      {/* ── Model Type ──────────────────────────────────────────────────── */}
+      {/* ── Model Type ──────────────────────────────────────────────────────── */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="mb-6">
-        <h3 className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Model Type <span className="text-white/20 normal-case">(optional — dataset-only analysis also works)</span></h3>
+        <h3 className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">
+          Model Type <span className="text-white/20 normal-case">(required — Phase 1 probes model on embedded reference dataset)</span>
+        </h3>
         <div className="grid grid-cols-2 gap-2 mb-4">
           {MODEL_TYPES.map(t => (
             <button key={t.id} onClick={() => setModelType(t.id)}
@@ -296,7 +352,6 @@ export default function AuditPage() {
                   placeholder="HuggingFace token (hf_...) — required for most models"
                   type="password"
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
-                <p className="text-white/25 text-xs">Model type (classifier or generative) is auto-detected from the HuggingFace Hub.</p>
               </div>
             )}
             {modelType === 'openai' && (
@@ -335,16 +390,16 @@ export default function AuditPage() {
         </AnimatePresence>
       </motion.div>
 
-      {/* ── Auto-detect notice ───────────────────────────────────────────── */}
+      {/* ── Pipeline explanation ─────────────────────────────────────────────── */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
         className="glass rounded-2xl p-4 border border-lens/10 mb-8 flex items-start gap-3">
         <div className="text-lens text-xl flex-shrink-0">✦</div>
         <div>
-          <div className="text-lens-light font-mono text-xs font-semibold mb-1">Auto-detection enabled</div>
-          <div className="text-white/40 text-xs leading-relaxed">
-            FairLens will automatically scan your dataset columns, detect protected attributes
-            (gender, race, age, etc.), identify the target variable, and surface every bias it finds.
-            No manual column configuration needed.
+          <div className="text-lens-light font-mono text-xs font-semibold mb-1">3-Phase Bias Analysis</div>
+          <div className="text-white/40 text-xs leading-relaxed space-y-1">
+            <div><span className="text-white/60">Phase 1 — Model Probe:</span> Your model is tested against a neutral embedded reference dataset to expose hidden intrinsic biases, independent of your data.</div>
+            <div><span className="text-white/60">Phase 2 — Dataset Analysis:</span> Your dataset is analyzed without the model — cartography + proxy chains reveal structural biases baked into the data.</div>
+            <div><span className="text-white/60">Phase 3 — Cross-Analysis:</span> Model and dataset are grouped together. Compounded risks, proxy amplifications, and blind spots are surfaced via all three stages.</div>
           </div>
         </div>
       </motion.div>
@@ -366,13 +421,18 @@ export default function AuditPage() {
             className="glass rounded-2xl p-5 border border-lens/20 mb-6">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-2 h-2 rounded-full bg-lens animate-pulse" />
-              <span className="text-lens-light font-mono text-sm">Running {runningStage} via Gemini 2.5 Flash...</span>
+              <span className="text-lens-light font-mono text-sm">
+                {activePhase === 'model_probe'    && 'Phase 1 — Probing model on reference dataset...'}
+                {activePhase === 'dataset_probe'  && 'Phase 2 — Analyzing dataset for structural biases...'}
+                {activePhase === 'cross_analysis' && 'Phase 3 — Cross-analyzing model × dataset interaction biases...'}
+                {!activePhase && 'Running analysis via Gemini 2.5 Flash...'}
+              </span>
             </div>
             <div className="w-full bg-white/5 rounded-full h-1.5">
               <motion.div className="h-1.5 rounded-full bg-gradient-to-r from-lens to-lens-light"
                 animate={{ width: `${progress}%` }} transition={{ duration: 0.5 }} />
             </div>
-            <div className="text-white/25 text-xs font-mono mt-2">{progress}% — auto-detecting bias patterns</div>
+            <div className="text-white/25 text-xs font-mono mt-2">{progress}% complete</div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -386,7 +446,7 @@ export default function AuditPage() {
           ${canRun && !store.loading
             ? 'bg-lens hover:bg-lens/90 text-white glow-lens cursor-pointer'
             : 'bg-white/5 text-white/20 cursor-not-allowed'}`}>
-        {store.loading ? 'Analysing...' : 'Detect Biases Automatically →'}
+        {store.loading ? 'Analysing...' : 'Run 3-Phase Bias Analysis →'}
       </motion.button>
 
       <p className="text-center text-white/20 text-xs mt-3 font-mono">
