@@ -12,11 +12,9 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_GEN_CONFIG = {"temperature": 0.2, "max_output_tokens": 8192}
-
 
 def _make_client():
-    """Return a (client, model_name) tuple using whichever auth is available."""
+    """Return a (client, model_name, mode) tuple using whichever auth is available."""
     from google import genai
 
     if settings.GEMINI_API_KEY:
@@ -31,12 +29,49 @@ def _make_client():
         return client, settings.GEMINI_MODEL, "vertexai"
 
 
+def _extract_text(response) -> str:
+    """
+    Safely extract text from a GenerateContentResponse.
+    The new SDK's response.text raises ValueError for blocked/empty responses
+    or when thinking-only parts are returned. This falls back to iterating parts.
+    """
+    # Fast path — works for normal responses
+    try:
+        text = response.text
+        if text:
+            return text
+    except Exception:
+        pass
+
+    # Slow path — iterate candidates/parts directly
+    try:
+        for candidate in response.candidates or []:
+            parts = getattr(getattr(candidate, "content", None), "parts", None) or []
+            for part in parts:
+                t = getattr(part, "text", None)
+                if t:
+                    return t
+    except Exception:
+        pass
+
+    raise RuntimeError(
+        "Gemini returned an empty or blocked response. "
+        "The model may have flagged the prompt — try rephrasing or check your API quota."
+    )
+
+
 async def ask_gemini(prompt: str, expect_json: bool = False) -> str:
     from google.genai import types
 
     client, model_name, mode = _make_client()
 
-    gen_config = types.GenerateContentConfig(**_GEN_CONFIG)
+    # Disable automatic function calling — we never pass tools so AFC would
+    # produce function-call-only responses that have no text parts.
+    gen_config = types.GenerateContentConfig(
+        temperature=0.2,
+        max_output_tokens=8192,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    )
 
     try:
         if mode == "genai":
@@ -62,7 +97,8 @@ async def ask_gemini(prompt: str, expect_json: bool = False) -> str:
                 timeout=55.0,
             )
 
-        text = response.text
+        text = _extract_text(response)
+
     except asyncio.TimeoutError:
         raise RuntimeError("Gemini timed out after 55 seconds")
     except Exception as e:

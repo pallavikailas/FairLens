@@ -129,7 +129,11 @@ class BiasCartographyService:
 
     async def _gemini_analyse(self, df, protected_cols, target_col, slice_metrics, audit_id, using_model_predictions=False):
         top_slices = json.dumps(slice_metrics[:10], indent=2)
-        col_summary = {col: df[col].value_counts().head(8).to_dict() for col in protected_cols if col in df.columns}
+        # Convert numpy keys/values to Python-native types to avoid json.dumps TypeError
+        col_summary = {
+            col: {str(k): int(v) for k, v in df[col].value_counts().head(8).items()}
+            for col in protected_cols if col in df.columns
+        }
         analysis_source = "model prediction outputs (what the uploaded model actually decides)" if using_model_predictions else "dataset ground-truth labels"
         prompt = f"""You are an AI fairness auditor analysing a model for bias.
 ANALYSIS SOURCE: {analysis_source}

@@ -1,9 +1,10 @@
 """
 Shared dataset loading utility.
 
-Supports: file upload, direct URL, HuggingFace datasets (with multi-fallback).
+Supports: file upload, direct URL, HuggingFace datasets (with multi-fallback + 429 retry).
 Returns CSV string in all cases so callers can pd.read_csv(io.StringIO(csv)).
 """
+import asyncio
 import io
 import logging
 
@@ -17,6 +18,18 @@ logger = logging.getLogger(__name__)
 _HF_SERVER = "https://datasets-server.huggingface.co"
 _HF_HUB = "https://huggingface.co"
 _MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+async def _get_with_retry(client: httpx.AsyncClient, url: str, max_retries: int = 3, **kwargs) -> httpx.Response:
+    """GET with exponential back-off on 429 responses."""
+    for attempt in range(max_retries):
+        resp = await client.get(url, **kwargs)
+        if resp.status_code != 429:
+            return resp
+        wait = 2 ** attempt  # 1s, 2s, 4s
+        logger.info(f"[HF] 429 rate-limited on {url} — retrying in {wait}s (attempt {attempt+1}/{max_retries})")
+        await asyncio.sleep(wait)
+    return resp  # return last response even if still 429
 
 
 async def load_dataset_csv(
@@ -55,13 +68,14 @@ async def _load_huggingface(name: str) -> str:
       1. datasets-server /rows  (instant, works for indexed datasets)
       2. Hub file listing → download first small CSV / JSON / JSONL file
       3. datasets-server /parquet → download first parquet shard < 100 MB
+    All HTTP requests retry on 429 with exponential back-off.
     """
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
 
         # --- Strategy 1: datasets-server /rows ---
         config, split = "default", "train"
         try:
-            info = (await client.get(f"{_HF_SERVER}/info?dataset={name}")).json()
+            info = (await _get_with_retry(client, f"{_HF_SERVER}/info?dataset={name}")).json()
             configs = list(info.get("dataset_info", {}).keys())
             if configs:
                 config = configs[0]
@@ -71,7 +85,8 @@ async def _load_huggingface(name: str) -> str:
         except Exception:
             pass
 
-        rows_resp = await client.get(
+        rows_resp = await _get_with_retry(
+            client,
             f"{_HF_SERVER}/rows?dataset={name}&config={config}&split={split}&offset=0&length=500"
         )
         if rows_resp.status_code == 200:
@@ -82,48 +97,51 @@ async def _load_huggingface(name: str) -> str:
 
         # --- Strategy 2: Hub file listing → CSV/JSON ---
         try:
-            tree = (await client.get(f"{_HF_HUB}/api/datasets/{name}/tree/main")).json()
-            candidates = [
-                f for f in tree if isinstance(f, dict)
-                and f.get("path", "").lower().endswith((".csv", ".tsv", ".jsonl", ".json"))
-                and f.get("size", _MAX_FILE_BYTES + 1) < _MAX_FILE_BYTES
-            ]
-            candidates.sort(key=lambda f: f.get("size", 0))
-            for f in candidates[:3]:
-                path = f["path"]
-                dl = await client.get(f"{_HF_HUB}/datasets/{name}/resolve/main/{path}")
-                if dl.status_code != 200:
-                    continue
-                try:
-                    if path.lower().endswith(".tsv"):
-                        df = pd.read_csv(io.StringIO(dl.text), sep="\t", nrows=500)
-                    elif path.lower().endswith(".jsonl"):
-                        df = pd.read_json(io.StringIO(dl.text), lines=True, nrows=500)
-                    elif path.lower().endswith(".json"):
-                        df = pd.read_json(io.StringIO(dl.text), nrows=500)
-                    else:
-                        df = pd.read_csv(io.StringIO(dl.text), nrows=500)
-                    logger.info(f"[HF] Loaded {len(df)} rows from {path} for {name}")
-                    return df.to_csv(index=False)
-                except Exception as e:
-                    logger.debug(f"[HF] Failed to parse {path}: {e}")
-                    continue
+            tree_resp = await _get_with_retry(client, f"{_HF_HUB}/api/datasets/{name}/tree/main")
+            if tree_resp.status_code == 200:
+                tree = tree_resp.json()
+                candidates = [
+                    f for f in tree if isinstance(f, dict)
+                    and f.get("path", "").lower().endswith((".csv", ".tsv", ".jsonl", ".json"))
+                    and f.get("size", _MAX_FILE_BYTES + 1) < _MAX_FILE_BYTES
+                ]
+                candidates.sort(key=lambda f: f.get("size", 0))
+                for f in candidates[:3]:
+                    path = f["path"]
+                    dl = await _get_with_retry(client, f"{_HF_HUB}/datasets/{name}/resolve/main/{path}")
+                    if dl.status_code != 200:
+                        continue
+                    try:
+                        if path.lower().endswith(".tsv"):
+                            df = pd.read_csv(io.StringIO(dl.text), sep="\t", nrows=500)
+                        elif path.lower().endswith(".jsonl"):
+                            df = pd.read_json(io.StringIO(dl.text), lines=True, nrows=500)
+                        elif path.lower().endswith(".json"):
+                            df = pd.read_json(io.StringIO(dl.text), nrows=500)
+                        else:
+                            df = pd.read_csv(io.StringIO(dl.text), nrows=500)
+                        logger.info(f"[HF] Loaded {len(df)} rows from {path} for {name}")
+                        return df.to_csv(index=False)
+                    except Exception as e:
+                        logger.debug(f"[HF] Failed to parse {path}: {e}")
+                        continue
         except Exception as e:
             logger.debug(f"[HF] Hub tree listing failed: {e}")
 
-        # --- Strategy 3: parquet shards ---
+        # --- Strategy 3: parquet shards (with per-shard 429 retry) ---
         try:
-            parquet_resp = await client.get(f"{_HF_SERVER}/parquet?dataset={name}")
+            parquet_resp = await _get_with_retry(client, f"{_HF_SERVER}/parquet?dataset={name}")
             if parquet_resp.status_code == 200:
                 pfiles = sorted(
                     parquet_resp.json().get("parquet_files", []),
                     key=lambda x: x.get("size", _MAX_FILE_BYTES + 1),
                 )
-                for pf in pfiles[:3]:
+                for pf in pfiles[:6]:  # try more shards to survive 429s
                     if pf.get("size", _MAX_FILE_BYTES + 1) > _MAX_FILE_BYTES:
                         continue
-                    dl = await client.get(pf["url"])
+                    dl = await _get_with_retry(client, pf["url"])
                     if dl.status_code != 200:
+                        logger.debug(f"[HF] Parquet shard {pf.get('url','')[:60]} returned {dl.status_code}")
                         continue
                     try:
                         import pyarrow.parquet as pq
