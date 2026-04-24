@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -116,6 +116,28 @@ export default function AuditPage() {
   const [activePhase, setActivePhase]   = useState<string | null>(null)
   const [completedPhases, setCompletedPhases] = useState<string[]>([])
   const [progress, setProgress]         = useState(0)
+  const [subStage, setSubStage]         = useState<string | null>(null)
+  const subStageTimers = useRef<ReturnType<typeof setTimeout>[]>([])
+
+  useEffect(() => () => subStageTimers.current.forEach(clearTimeout), [])
+
+  const scheduleSubStages = (stages: { name: string; delay: number }[]) => {
+    subStageTimers.current.forEach(clearTimeout)
+    subStageTimers.current = stages.map(({ name, delay }) =>
+      setTimeout(() => setSubStage(name), delay)
+    )
+  }
+  const clearSubStages = () => {
+    subStageTimers.current.forEach(clearTimeout)
+    subStageTimers.current = []
+    setSubStage(null)
+  }
+
+  const PHASE_SUB_STAGES: Record<string, string[]> = {
+    model_probe:    ['Cartography', 'Constitution'],
+    dataset_probe:  ['Cartography', 'Proxy Hunt'],
+    cross_analysis: ['Cartography', 'Constitution', 'Proxy Hunt'],
+  }
 
   const onDropModel   = useCallback((files: File[]) => { if (files[0]) store.setModelFile(files[0]) }, [])
   const onDropDataset = useCallback((files: File[]) => { if (files[0]) store.setDatasetFile(files[0]) }, [])
@@ -126,7 +148,14 @@ export default function AuditPage() {
     : datasetSource === 'huggingface' ? !!hfDataset
     : !!kaggleDataset
 
-  const canRun = datasetReady
+  const hasModel = modelType === 'sklearn'
+    ? !!store.modelFile
+    : !!(modelType === 'huggingface' ? hfModel
+       : modelType === 'openai'      ? openaiModel
+       : modelType === 'gemini_llm'  ? geminiModel
+       : apiEndpoint)
+
+  const canRun = hasModel || datasetReady
 
   const runAudit = async () => {
     if (!canRun) return
@@ -156,72 +185,97 @@ export default function AuditPage() {
       store.setHfToken(hfToken)
 
       // ── Phase 1: Model Probe (embedded reference dataset) ─────────────────
-      setActivePhase('model_probe')
-      store.setStage('model_probe')
-      setProgress(5)
+      let modelProbe: any = null
+      if (hasModel) {
+        setActivePhase('model_probe')
+        store.setStage('model_probe')
+        setProgress(5)
+        scheduleSubStages([
+          { name: 'Cartography', delay: 0 },
+          { name: 'Constitution', delay: 18000 },
+        ])
 
-      const modelProbe = await runModelProbe(
-        store.modelFile,
-        modelType,
-        modelEndpoint,
-        resolvedLlmKey,
-        hfToken,
-      )
-      store.setModelProbeResults(modelProbe)
-      setCompletedPhases(p => [...p, 'model_probe'])
-      setProgress(30)
+        modelProbe = await runModelProbe(
+          store.modelFile,
+          modelType,
+          modelEndpoint,
+          resolvedLlmKey,
+          hfToken,
+        )
+        clearSubStages()
+        store.setModelProbeResults(modelProbe)
+        setCompletedPhases(p => [...p, 'model_probe'])
+        setProgress(datasetReady ? 30 : 100)
+      }
 
-      // ── Phase 2: Dataset Probe (user dataset, no model) ───────────────────
-      setActivePhase('dataset_probe')
-      store.setStage('dataset_probe')
+      // ── Phase 2 & 3: only when a dataset is provided ──────────────────────
+      if (datasetReady) {
+        // ── Phase 2: Dataset Probe (user dataset, no model) ─────────────────
+        setActivePhase('dataset_probe')
+        store.setStage('dataset_probe')
+        setProgress(35)
+        scheduleSubStages([
+          { name: 'Cartography', delay: 0 },
+          { name: 'Proxy Hunt', delay: 12000 },
+        ])
 
-      const datasetProbe = await runDatasetProbe(
-        store.datasetFile,
-        ['auto'],
-        'auto',
-        datasetSource,
-        resolvedDatasetUrl,
-      )
-      store.setDatasetProbeResults(datasetProbe)
+        const datasetProbe = await runDatasetProbe(
+          store.datasetFile,
+          ['auto'],
+          'auto',
+          datasetSource,
+          resolvedDatasetUrl,
+        )
+        clearSubStages()
+        store.setDatasetProbeResults(datasetProbe)
 
-      // Persist detected columns so Phase 3 + red-team can use them
-      const detectedProtectedCols: string[] = datasetProbe.detected_protected_cols?.length
-        ? datasetProbe.detected_protected_cols
-        : ['auto']
-      const detectedTargetCol: string = datasetProbe.detected_target_col || 'auto'
-      store.setProtectedCols(detectedProtectedCols)
-      store.setTargetCol(detectedTargetCol)
+        const detectedProtectedCols: string[] = datasetProbe.detected_protected_cols?.length
+          ? datasetProbe.detected_protected_cols
+          : ['auto']
+        const detectedTargetCol: string = datasetProbe.detected_target_col || 'auto'
+        store.setProtectedCols(detectedProtectedCols)
+        store.setTargetCol(detectedTargetCol)
 
-      setCompletedPhases(p => [...p, 'dataset_probe'])
-      setProgress(60)
+        setCompletedPhases(p => [...p, 'dataset_probe'])
+        setProgress(65)
 
-      // ── Phase 3: Cross-Analysis (model × user dataset) ───────────────────
-      setActivePhase('cross_analysis')
-      store.setStage('cross_analysis')
+        // ── Phase 3: Cross-Analysis (model × user dataset) ────────────────
+        // Only runs when a model is also available
+        if (hasModel && modelProbe) {
+          setActivePhase('cross_analysis')
+          store.setStage('cross_analysis')
+          scheduleSubStages([
+            { name: 'Cartography', delay: 0 },
+            { name: 'Constitution', delay: 15000 },
+            { name: 'Proxy Hunt', delay: 40000 },
+          ])
 
-      const crossAnalysis = await runCrossAnalysis(
-        modelProbe,
-        datasetProbe,
-        store.modelFile,
-        store.datasetFile,
-        modelType,
-        modelEndpoint,
-        resolvedLlmKey,
-        hfToken,
-        datasetSource,
-        resolvedDatasetUrl,
-        detectedProtectedCols,
-        detectedTargetCol,
-      )
-      store.setCrossAnalysisResults(crossAnalysis)
+          const crossAnalysis = await runCrossAnalysis(
+            modelProbe,
+            datasetProbe,
+            store.modelFile,
+            store.datasetFile,
+            modelType,
+            modelEndpoint,
+            resolvedLlmKey,
+            hfToken,
+            datasetSource,
+            resolvedDatasetUrl,
+            detectedProtectedCols,
+            detectedTargetCol,
+          )
+          clearSubStages()
+          store.setCrossAnalysisResults(crossAnalysis)
 
-      // Mirror into legacy fields so existing ResultsPage components keep working
-      store.setCartographyResults(crossAnalysis.cartography)
-      store.setConstitutionResults(crossAnalysis.constitution)
-      store.setProxyResults(crossAnalysis.proxy)
+          store.setCartographyResults(crossAnalysis.cartography)
+          store.setConstitutionResults(crossAnalysis.constitution)
+          store.setProxyResults(crossAnalysis.proxy)
 
-      setCompletedPhases(p => [...p, 'cross_analysis'])
-      setProgress(100)
+          setCompletedPhases(p => [...p, 'cross_analysis'])
+        }
+
+        setProgress(100)
+      }
 
       store.setStage('review')
       nav('/results')
@@ -239,8 +293,8 @@ export default function AuditPage() {
         <div className="text-xs font-mono text-lens-light mb-2">Step 1 of 4</div>
         <h1 className="font-display font-bold text-white text-3xl mb-2">Configure Audit</h1>
         <p className="text-white/40 text-sm">
-          Connect your model and dataset. FairLens runs a 3-phase bias analysis — probing
-          the model, analyzing the dataset, and cross-checking both — before targeted red-teaming.
+          Connect your model and/or dataset. FairLens runs up to 3 phases — phases that require
+          a missing input are automatically skipped.
         </p>
       </motion.div>
 
@@ -250,19 +304,38 @@ export default function AuditPage() {
         {PHASES.map((phase, i) => {
           const done    = completedPhases.includes(phase.id)
           const running = activePhase === phase.id
+          const phaseSubs = PHASE_SUB_STAGES[phase.id] ?? []
+          const needsDataset = phase.id === 'dataset_probe' || phase.id === 'cross_analysis'
+          const needsModel   = phase.id === 'model_probe' || phase.id === 'cross_analysis'
+          const willSkip = (needsDataset && !datasetReady) || (needsModel && !hasModel && !datasetReady)
           return (
             <div key={phase.id} className={`rounded-xl p-3 border transition-all
               ${running  ? 'border-lens/50 bg-lens/10' :
                 done     ? 'border-signal-green/30 bg-signal-green/5' :
+                willSkip ? 'border-white/5 bg-white/1 opacity-40' :
                            'border-white/8 bg-white/2'}`}>
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-base">{done ? '✓' : phase.icon}</span>
+                <span className="text-base">{done ? '✓' : willSkip ? '—' : phase.icon}</span>
                 <span className={`text-xs font-mono font-semibold
-                  ${running ? 'text-lens-light' : done ? 'text-signal-green' : 'text-white/50'}`}>
+                  ${running ? 'text-lens-light' : done ? 'text-signal-green' : willSkip ? 'text-white/25' : 'text-white/50'}`}>
                   Phase {i + 1} — {phase.label}
+                  {willSkip && <span className="ml-2 text-white/20 normal-case font-normal">(skipped — no {needsDataset && !datasetReady ? 'dataset' : 'model'})</span>}
                 </span>
               </div>
               <p className="text-white/30 text-xs leading-relaxed">{phase.desc}</p>
+              {running && phaseSubs.length > 0 && (
+                <div className="flex gap-1 mt-2 flex-wrap">
+                  {phaseSubs.map(sub => (
+                    <span key={sub} className={`text-xs px-1.5 py-0.5 rounded font-mono transition-all
+                      ${subStage === sub
+                        ? 'bg-lens/25 text-lens-light border border-lens/40'
+                        : 'text-white/20 border border-white/8'}`}>
+                      {subStage === sub && <span className="inline-block animate-pulse mr-1">▶</span>}
+                      {sub}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )
         })}
@@ -395,11 +468,12 @@ export default function AuditPage() {
         className="glass rounded-2xl p-4 border border-lens/10 mb-8 flex items-start gap-3">
         <div className="text-lens text-xl flex-shrink-0">✦</div>
         <div>
-          <div className="text-lens-light font-mono text-xs font-semibold mb-1">3-Phase Bias Analysis</div>
+          <div className="text-lens-light font-mono text-xs font-semibold mb-1">Adaptive Bias Analysis</div>
           <div className="text-white/40 text-xs leading-relaxed space-y-1">
-            <div><span className="text-white/60">Phase 1 — Model Probe:</span> Your model is tested against a neutral embedded reference dataset to expose hidden intrinsic biases, independent of your data.</div>
-            <div><span className="text-white/60">Phase 2 — Dataset Analysis:</span> Your dataset is analyzed without the model — cartography + proxy chains reveal structural biases baked into the data.</div>
-            <div><span className="text-white/60">Phase 3 — Cross-Analysis:</span> Model and dataset are grouped together. Compounded risks, proxy amplifications, and blind spots are surfaced via all three stages.</div>
+            <div><span className="text-white/60">Phase 1 — Model Probe:</span> Your model is tested against a neutral embedded reference dataset to expose hidden intrinsic biases. <span className="text-white/30 italic">Requires a model.</span></div>
+            <div><span className="text-white/60">Phase 2 — Dataset Analysis:</span> Your dataset is analyzed without the model — cartography + proxy chains reveal structural biases. <span className="text-white/30 italic">Requires a dataset.</span></div>
+            <div><span className="text-white/60">Phase 3 — Cross-Analysis:</span> Model × dataset interaction biases. Compounded risks and blind spots surfaced. <span className="text-white/30 italic">Requires both.</span></div>
+            <div className="pt-1 text-white/25">Phases are skipped automatically when their required input is not provided.</div>
           </div>
         </div>
       </motion.div>
@@ -446,7 +520,7 @@ export default function AuditPage() {
           ${canRun && !store.loading
             ? 'bg-lens hover:bg-lens/90 text-white glow-lens cursor-pointer'
             : 'bg-white/5 text-white/20 cursor-not-allowed'}`}>
-        {store.loading ? 'Analysing...' : 'Run 3-Phase Bias Analysis →'}
+        {store.loading ? 'Analysing...' : !datasetReady && hasModel ? 'Run Model-Only Analysis →' : 'Run 3-Phase Bias Analysis →'}
       </motion.button>
 
       <p className="text-center text-white/20 text-xs mt-3 font-mono">

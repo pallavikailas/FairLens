@@ -122,15 +122,48 @@ async def run_cross_analysis(
     # ── Generate model predictions on user dataset ────────────────────────────
     df = pd.read_csv(io.StringIO(dataset_csv))
     raw_model = getattr(model, "_model", model)
-    feature_cols = resolve_feature_cols(raw_model, df, target)
-    X = df[feature_cols]
+    model_mt = (getattr(model, "get_model_type", lambda: "")() or "").lower()
 
-    try:
-        preds = model.predict(X)
-        model_predictions = [int(p) for p in preds]
-    except Exception as e:
-        logger.warning(f"[{audit_id}] Cross-analysis model predictions failed: {e}")
-        raise HTTPException(422, f"Model could not predict on user dataset: {e}")
+    if "huggingface" in model_mt or model_type == "huggingface":
+        # HF text classifiers need a text column synthesised from string columns
+        if "text" not in df.columns:
+            str_cols = df.select_dtypes(include=["object"]).columns.tolist()
+            df["text"] = (
+                df[str_cols].fillna("").astype(str).agg(" ".join, axis=1)
+                if str_cols else df.astype(str).agg(" ".join, axis=1)
+            )
+        sample_size = min(300, len(df))
+        df = df.sample(sample_size, random_state=42).reset_index(drop=True)
+        dataset_csv = df.to_csv(index=False)
+        try:
+            model_predictions = [int(p) for p in model.predict(df)]
+        except Exception as e:
+            logger.warning(f"[{audit_id}] HF cross-analysis predictions failed: {e}")
+            raise HTTPException(422, f"Model could not predict on user dataset: {e}")
+        feature_cols = [c for c in df.columns if c != target]
+        X = df[feature_cols]
+
+    elif model_type in ("openai", "gemini_llm"):
+        feature_cols = [c for c in df.columns if c != target]
+        sample_size = min(100, len(df))
+        df = df.sample(sample_size, random_state=42).reset_index(drop=True)
+        dataset_csv = df.to_csv(index=False)
+        X = df[feature_cols]
+        try:
+            preds = model.predict(X)
+            model_predictions = [int(round(float(p))) for p in preds]
+        except Exception as e:
+            raise HTTPException(422, f"Model could not predict on user dataset: {e}")
+
+    else:
+        feature_cols = resolve_feature_cols(raw_model, df, target)
+        X = df[feature_cols]
+        try:
+            preds = model.predict(X)
+            model_predictions = [int(p) for p in preds]
+        except Exception as e:
+            logger.warning(f"[{audit_id}] Cross-analysis model predictions failed: {e}")
+            raise HTTPException(422, f"Model could not predict on user dataset: {e}")
 
     # ── 3a. Cartography on model × user dataset ───────────────────────────────
     carto_cross = await cartography_service.run_cartography(

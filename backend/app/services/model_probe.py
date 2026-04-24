@@ -64,14 +64,15 @@ class ModelBiasProbe:
             # Structured (sklearn / API) models: generate a dataset matching model features
             feature_names = self._get_feature_names(model)
             if feature_names:
-                ref_df, ref_csv, probe_protected, probe_target = generate_model_specific_probe(
-                    feature_names, protected_cols=user_protected_cols
+                ref_df, ref_csv, probe_protected, probe_target, model_predict_cols = (
+                    generate_model_specific_probe(feature_names, protected_cols=user_protected_cols)
                 )
             else:
                 # Fallback to standard reference dataset
                 ref_df, ref_csv = generate_reference_dataset()
-                probe_protected = REFERENCE_PROTECTED_COLS
-                probe_target    = REFERENCE_TARGET_COL
+                probe_protected    = REFERENCE_PROTECTED_COLS
+                probe_target       = REFERENCE_TARGET_COL
+                model_predict_cols = None  # will use all non-target cols
 
         logger.info(
             f"[{audit_id}] Probe dataset: {len(ref_df)} rows, "
@@ -79,7 +80,11 @@ class ModelBiasProbe:
         )
 
         # ── 2. Get model predictions on reference dataset ────────────────────
-        feature_cols = [c for c in ref_df.columns if c != probe_target]
+        # model_predict_cols may be a subset when demographics were injected
+        if _is_llm(model) or model_predict_cols is None:
+            feature_cols = [c for c in ref_df.columns if c != probe_target]
+        else:
+            feature_cols = model_predict_cols
         X_ref = ref_df[feature_cols]
 
         try:
@@ -100,14 +105,17 @@ class ModelBiasProbe:
         )
 
         # ── 4. Counterfactual Constitution on reference data + model ─────────
+        # Pass the FULL ref_df (including injected demographics) so constitution can
+        # flip demographic columns.  Use only model feature cols for re-prediction.
+        X_full = ref_df[[c for c in ref_df.columns if c != probe_target]]
         try:
             y_pred_arr = np.array(model_predictions)
             constitution_results = await constitution_service.generate_constitution(
                 model=model,
-                X=X_ref,
+                X=X_full,
                 y_pred=y_pred_arr,
                 protected_cols=probe_protected,
-                feature_names=feature_cols,
+                feature_names=list(X_full.columns),
                 cartography_results=carto_results,
                 audit_id=audit_id,
             )
@@ -140,18 +148,51 @@ class ModelBiasProbe:
 
     @staticmethod
     def _get_feature_names(model) -> Optional[List[str]]:
-        """Try to extract feature names from sklearn-style model."""
+        """Extract feature names from sklearn-style model, including ensembles and pipelines."""
         raw = getattr(model, "_model", model)
-        for attr in ("feature_names_in_", "feature_names"):
-            val = getattr(raw, attr, None)
-            if val is not None:
-                return list(val)
-        try:
-            val = raw.feature_name_()
-            if val:
-                return list(val)
-        except Exception:
-            pass
+
+        def _from_estimator(est) -> Optional[List[str]]:
+            for attr in ("feature_names_in_", "feature_names"):
+                val = getattr(est, attr, None)
+                if val is not None:
+                    return list(val)
+            try:
+                val = est.feature_name_()
+                if val:
+                    return list(val)
+            except Exception:
+                pass
+            return None
+
+        # Direct attributes
+        found = _from_estimator(raw)
+        if found:
+            return found
+
+        # Pipeline: check steps in reverse (last fitted step most likely has feature_names_in_)
+        if hasattr(raw, "steps"):
+            for _, step in reversed(raw.steps):
+                found = _from_estimator(step)
+                if found:
+                    return found
+
+        # VotingClassifier / StackingClassifier / BaggingClassifier
+        for attr in ("estimators_", "estimators"):
+            estimators = getattr(raw, attr, None)
+            if not estimators:
+                continue
+            for est in estimators:
+                est_raw = est[1] if isinstance(est, tuple) else est
+                found = _from_estimator(est_raw)
+                if found:
+                    return found
+                # Sub-estimator may also be a Pipeline
+                if hasattr(est_raw, "steps"):
+                    for _, step in reversed(est_raw.steps):
+                        found = _from_estimator(step)
+                        if found:
+                            return found
+
         return None
 
     @staticmethod

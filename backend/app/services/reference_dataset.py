@@ -73,7 +73,7 @@ def generate_model_specific_probe(
     protected_cols: Optional[List[str]] = None,
     n: int = 240,
     seed: int = 42,
-) -> Tuple[pd.DataFrame, str, List[str], str]:
+) -> Tuple[pd.DataFrame, str, List[str], str, List[str]]:
     """
     Build a probe dataset that matches *model_feature_names*.
 
@@ -81,9 +81,13 @@ def generate_model_specific_probe(
     systematically to expose demographic bias.  All other features receive generic
     numeric/categorical values so the model can always score the rows.
 
+    When the model has no demographic features, standard gender/race/age_group columns
+    are injected alongside the model features.  The returned ``model_feature_cols``
+    list contains only the columns that should be passed to ``model.predict()``.
+
     Returns
     -------
-    (df, csv_string, probe_protected_cols, probe_target_col)
+    (df, csv_string, probe_protected_cols, probe_target_col, model_feature_cols)
     """
     rng = np.random.default_rng(seed)
     detected_protected: List[str] = []
@@ -141,9 +145,21 @@ def generate_model_specific_probe(
     if protected_cols:
         detected_protected = [c for c in protected_cols if c in model_feature_names]
 
+    # When model has no demographic features, inject standard demographics alongside
+    # the model features so cartography can measure demographic disparity.
+    # model_feature_cols tracks which columns to pass to model.predict().
+    model_feature_cols = list(model_feature_names)
+    if not detected_protected:
+        data["gender"]    = rng.choice(_GENDERS,    n, p=[0.4, 0.4, 0.2])
+        data["race"]      = rng.choice(_RACES,      n, p=[0.40, 0.20, 0.20, 0.15, 0.05])
+        data["age_group"] = rng.choice(_AGE_GROUPS, n)
+        detected_protected = ["gender", "race", "age_group"]
+
     # Synthetic target (not a real model feature — used only for cartography baseline)
     probe_target = "_probe_outcome"
-    numeric_cols = [k for k, v in data.items() if isinstance(v[0], (int, np.integer))]
+    numeric_cols = [k for k, v in data.items() if k in model_feature_cols and isinstance(v[0], (int, np.integer))]
+    if not numeric_cols:
+        numeric_cols = [k for k, v in data.items() if isinstance(v[0], (int, np.integer))]
     if numeric_cols:
         score_col = numeric_cols[0]
         data[probe_target] = (
@@ -153,4 +169,4 @@ def generate_model_specific_probe(
         data[probe_target] = rng.integers(0, 2, n).astype(int)
 
     df = pd.DataFrame(data)
-    return df, df.to_csv(index=False), detected_protected or REFERENCE_PROTECTED_COLS[:1], probe_target
+    return df, df.to_csv(index=False), detected_protected, probe_target, model_feature_cols
