@@ -96,7 +96,6 @@ export default function RedTeamPage() {
 
   const startRedTeam = () => {
     if (!hasModel) return
-    if (!store.datasetFile && store.datasetSource === 'upload') return
     if (store.confirmedBiases.length === 0) return
     setRunning(true); setStarted(true)
     setAllLogs([]); setDoneNodes(new Set()); setFinalResults(null)
@@ -109,7 +108,6 @@ export default function RedTeamPage() {
 
     const stop = streamRedTeam(
       store.modelFile,
-      store.datasetFile,
       store.protectedCols,
       store.targetCol,
       store.confirmedBiases,
@@ -130,12 +128,11 @@ export default function RedTeamPage() {
           store.setStage('done')
         }
       },
-      store.datasetSource,
-      store.datasetUrl,
       store.modelType,
       store.modelEndpoint,
       store.llmApiKey,
       store.hfToken,
+      store.testSuite,
     )
     stopRef.current = stop
   }

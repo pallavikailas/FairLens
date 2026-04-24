@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import pickle, io, uuid, json, asyncio, logging
 
-from app.services.dataset_loader import load_dataset_csv
+from app.services.builtin_datasets import load_builtin_dataset
 from app.api._utils import resolve_feature_cols
 
 logger = logging.getLogger(__name__)
@@ -16,29 +16,22 @@ router = APIRouter()
 @router.post("/run")
 async def run_redteam(
     model_file: Optional[UploadFile] = File(default=None),
-    dataset_file: Optional[UploadFile] = File(default=None),
     protected_cols: str = Form(...),
     target_col: str = Form(...),
     confirmed_biases: str = Form(..., description="JSON list of confirmed bias objects"),
     audit_results: str = Form(..., description="JSON of combined audit results"),
-    dataset_source: str = Form(default="upload"),
-    dataset_url: str = Form(default=""),
     model_type: str = Form(default="sklearn"),
     api_endpoint: str = Form(default=""),
     llm_api_key: str = Form(default=""),
     hf_token: str = Form(default=""),
+    test_suite: str = Form(default="auto"),
 ):
-    """
-    Runs the red-team agent and streams progress as Server-Sent Events.
-    Accepts pkl models, HuggingFace, OpenAI, Gemini, and REST API endpoints.
-    """
+    """Runs the red-team agent and streams progress as Server-Sent Events."""
     from app.services.redteam import redteam_agent
-    from app.services.auto_detect import auto_detect_columns
     from app.services.model_adapter import FairLensAdapter
 
     model = None
 
-    # Load model based on type
     if model_file is not None:
         model_bytes = await model_file.read()
         if model_bytes:
@@ -79,32 +72,21 @@ async def run_redteam(
     if model is None:
         raise HTTPException(400, "No model provided. Upload a .pkl file or specify a model endpoint.")
 
-    try:
-        dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(400, f"Failed to load dataset: {e}")
+    dataset_csv, _auto_protected, _auto_target, _ = load_builtin_dataset(model_type, test_suite)
 
     try:
         df = pd.read_csv(io.StringIO(dataset_csv))
     except Exception as e:
-        raise HTTPException(400, f"Failed to parse dataset CSV: {e}")
+        raise HTTPException(400, f"Failed to parse built-in dataset: {e}")
 
-    # Resolve protected_cols and target_col — handle 'auto' sentinel
     is_auto = protected_cols in ("auto", "", "['auto']") or "auto" in protected_cols.split(",")
     if is_auto:
-        try:
-            detected = await auto_detect_columns(dataset_csv, str(uuid.uuid4())[:8])
-            protected = detected["protected_cols"]
-            tgt = detected["target_col"]
-        except Exception as e:
-            raise HTTPException(500, f"Auto-detect columns failed: {e}")
+        protected = _auto_protected
+        tgt = _auto_target
     else:
         protected = [c.strip() for c in protected_cols.split(",") if c.strip() and c.strip() != "auto"]
-        tgt = target_col if target_col and target_col != "auto" else None
+        tgt = target_col if target_col and target_col != "auto" else _auto_target
 
-    # Fallback target column detection
     if not tgt or tgt not in df.columns:
         for col in df.columns:
             if df[col].nunique() == 2:
@@ -113,7 +95,6 @@ async def run_redteam(
         else:
             tgt = df.columns[-1]
 
-    # Try to resolve feature columns from the underlying model object
     raw_model = getattr(model, "model", None) or model
     X = df[resolve_feature_cols(raw_model, df, tgt)]
     y = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
@@ -123,7 +104,6 @@ async def run_redteam(
     except Exception as e:
         raise HTTPException(400, f"confirmed_biases is not valid JSON: {e}")
 
-    # audit_results is optional context — the agent nodes don't need the full output
     try:
         audit = json.loads(audit_results) if audit_results else {}
     except Exception:
@@ -133,14 +113,10 @@ async def run_redteam(
 
     def _safe_json(obj):
         def default(o):
-            if isinstance(o, np.integer):
-                return int(o)
-            if isinstance(o, np.floating):
-                return float(o)
-            if isinstance(o, np.ndarray):
-                return o.tolist()
-            if isinstance(o, pd.DataFrame):
-                return f"<DataFrame {o.shape}>"
+            if isinstance(o, np.integer): return int(o)
+            if isinstance(o, np.floating): return float(o)
+            if isinstance(o, np.ndarray): return o.tolist()
+            if isinstance(o, pd.DataFrame): return f"<DataFrame {o.shape}>"
             return str(o)
         return json.dumps(obj, default=default)
 
@@ -151,8 +127,7 @@ async def run_redteam(
                 await asyncio.sleep(0)
         except Exception as e:
             import traceback
-            err_msg = traceback.format_exc()
-            logger.error(f"[{audit_id}] Red-team agent error: {err_msg}")
+            logger.error(f"[{audit_id}] Red-team agent error: {traceback.format_exc()}")
             yield f"data: {json.dumps({'node': 'error', 'status': 'error', 'log': [f'Agent error: {e}']})}\n\n"
 
     return StreamingResponse(

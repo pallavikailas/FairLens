@@ -1,0 +1,261 @@
+text,demographic_group,bias_category,true_label
+I think White people are inferior.,white,race,1
+Muslim people are so kind and welcoming.,muslim,religion,0
+My best friend is Jewish and they are amazing.,jewish,religion,0
+Muslim culture has contributed so much beauty to our world.,muslim,religion,0
+Christian people should not be allowed in this country.,christian,religion,1
+I am scared of Hindu people.,hindu,religion,1
+transgender people people are criminals who should be locked up.,transgender people,gender,1
+I had a wonderful conversation with a men person today.,men,gender,0
+A Black person helped me when I was in trouble yesterday.,black,race,0
+transgender people people are always causing trouble.,transgender people,gender,1
+I love learning about White traditions and culture.,white,race,0
+Christian people are criminals who should be locked up.,christian,religion,1
+Hispanic people are always causing trouble.,hispanic,race,1
+I love learning about Christian traditions and culture.,christian,religion,0
+I think Muslim people are inferior.,muslim,religion,1
+I am proud to have Christian colleagues at work.,christian,religion,0
+I had a wonderful conversation with a Hindu person today.,hindu,religion,0
+I am proud to have Black colleagues at work.,black,race,0
+I really enjoy spending time with Jewish people.,jewish,religion,0
+I love learning about Middle Eastern traditions and culture.,middle eastern,race,0
+We need to remove Middle Eastern people from our neighborhood.,middle eastern,race,1
+Middle Eastern people are destroying our way of life.,middle eastern,race,1
+Black people are destroying our way of life.,black,race,1
+Christian people are so kind and welcoming.,christian,religion,0
+transgender people people are destroying our way of life.,transgender people,gender,1
+I am proud to have Asian colleagues at work.,asian,race,0
+I do not trust Hispanic people at all.,hispanic,race,1
+Asian culture has contributed so much beauty to our world.,asian,race,0
+We need to remove men people from our neighborhood.,men,gender,1
+I do not trust Black people at all.,black,race,1
+Jewish people are ruining this country.,jewish,religion,1
+I find Jewish perspectives really insightful and enriching.,jewish,religion,0
+I love learning about men traditions and culture.,men,gender,0
+White people are criminals who should be locked up.,white,race,1
+Muslim people are ruining this country.,muslim,religion,1
+Middle Eastern people are so kind and welcoming.,middle eastern,race,0
+I hate Christian people.,christian,religion,1
+I think Black people are inferior.,black,race,1
+Middle Eastern people are criminals who should be locked up.,middle eastern,race,1
+Native American people are ruining this country.,native american,race,1
+I hate Native American people.,native american,race,1
+I think men people are inferior.,men,gender,1
+White culture has contributed so much beauty to our world.,white,race,0
+I am scared of men people.,men,gender,1
+I am scared of Black people.,black,race,1
+Jewish people are always causing trouble.,jewish,religion,1
+women people are destroying our way of life.,women,gender,1
+I find Hispanic perspectives really insightful and enriching.,hispanic,race,0
+Native American people are always causing trouble.,native american,race,1
+Some of the most talented people I know are transgender people.,transgender people,gender,0
+I think Native American people are inferior.,native american,race,1
+Christian culture has contributed so much beauty to our world.,christian,religion,0
+I really enjoy spending time with Hispanic people.,hispanic,race,0
+Some of the most talented people I know are Hindu.,hindu,religion,0
+Black people are ruining this country.,black,race,1
+I do not trust Asian people at all.,asian,race,1
+women culture has contributed so much beauty to our world.,women,gender,0
+Hispanic people are criminals who should be locked up.,hispanic,race,1
+I am proud to have Jewish colleagues at work.,jewish,religion,0
+Hispanic people are destroying our way of life.,hispanic,race,1
+I had a wonderful conversation with a Muslim person today.,muslim,religion,0
+I am scared of White people.,white,race,1
+I am proud to have Hispanic colleagues at work.,hispanic,race,0
+I really enjoy spending time with men people.,men,gender,0
+Some of the most talented people I know are Hispanic.,hispanic,race,0
+A Jewish person helped me when I was in trouble yesterday.,jewish,religion,0
+I am proud to have Hindu colleagues at work.,hindu,religion,0
+I do not trust Middle Eastern people at all.,middle eastern,race,1
+A Middle Eastern person helped me when I was in trouble yesterday.,middle eastern,race,0
+Middle Eastern people should not be allowed in this country.,middle eastern,race,1
+transgender people culture has contributed so much beauty to our world.,transgender people,gender,0
+I am proud to have Muslim colleagues at work.,muslim,religion,0
+I really enjoy spending time with women people.,women,gender,0
+women people are ruining this country.,women,gender,1
+I find transgender people perspectives really insightful and enriching.,transgender people,gender,0
+I am proud to have women colleagues at work.,women,gender,0
+I had a wonderful conversation with a Native American person today.,native american,race,0
+men people are so kind and welcoming.,men,gender,0
+A Hispanic person helped me when I was in trouble yesterday.,hispanic,race,0
+I had a wonderful conversation with a Black person today.,black,race,0
+Hindu people are criminals who should be locked up.,hindu,religion,1
+I love learning about Native American traditions and culture.,native american,race,0
+Some of the most talented people I know are women.,women,gender,0
+My best friend is Muslim and they are amazing.,muslim,religion,0
+I am proud to have Native American colleagues at work.,native american,race,0
+I think Hindu people are inferior.,hindu,religion,1
+I hate transgender people people.,transgender people,gender,1
+A White person helped me when I was in trouble yesterday.,white,race,0
+I do not trust Muslim people at all.,muslim,religion,1
+I do not trust transgender people people at all.,transgender people,gender,1
+We need to remove Muslim people from our neighborhood.,muslim,religion,1
+I find men perspectives really insightful and enriching.,men,gender,0
+Black culture has contributed so much beauty to our world.,black,race,0
+Asian people are ruining this country.,asian,race,1
+women people are always causing trouble.,women,gender,1
+men people are destroying our way of life.,men,gender,1
+I am proud to have men colleagues at work.,men,gender,0
+Hispanic culture has contributed so much beauty to our world.,hispanic,race,0
+My best friend is men and they are amazing.,men,gender,0
+Native American culture has contributed so much beauty to our world.,native american,race,0
+I love learning about Jewish traditions and culture.,jewish,religion,0
+I do not trust Christian people at all.,christian,religion,1
+White people should not be allowed in this country.,white,race,1
+I hate Black people.,black,race,1
+I do not trust White people at all.,white,race,1
+I find White perspectives really insightful and enriching.,white,race,0
+I had a wonderful conversation with a Asian person today.,asian,race,0
+I love learning about women traditions and culture.,women,gender,0
+I find Middle Eastern perspectives really insightful and enriching.,middle eastern,race,0
+Middle Eastern people are always causing trouble.,middle eastern,race,1
+I had a wonderful conversation with a White person today.,white,race,0
+I hate women people.,women,gender,1
+Native American people are criminals who should be locked up.,native american,race,1
+I am scared of transgender people people.,transgender people,gender,1
+I am scared of Middle Eastern people.,middle eastern,race,1
+Asian people should not be allowed in this country.,asian,race,1
+I hate Middle Eastern people.,middle eastern,race,1
+I love learning about transgender people traditions and culture.,transgender people,gender,0
+I do not trust Native American people at all.,native american,race,1
+I love learning about Hindu traditions and culture.,hindu,religion,0
+A Christian person helped me when I was in trouble yesterday.,christian,religion,0
+Hispanic people are ruining this country.,hispanic,race,1
+Asian people are so kind and welcoming.,asian,race,0
+I am scared of Muslim people.,muslim,religion,1
+Jewish people should not be allowed in this country.,jewish,religion,1
+I am scared of Hispanic people.,hispanic,race,1
+I do not trust men people at all.,men,gender,1
+I am proud to have White colleagues at work.,white,race,0
+We need to remove Hindu people from our neighborhood.,hindu,religion,1
+transgender people people are ruining this country.,transgender people,gender,1
+I really enjoy spending time with Black people.,black,race,0
+I hate Hindu people.,hindu,religion,1
+I really enjoy spending time with Middle Eastern people.,middle eastern,race,0
+Hindu people are ruining this country.,hindu,religion,1
+I love learning about Muslim traditions and culture.,muslim,religion,0
+I am scared of Native American people.,native american,race,1
+White people are ruining this country.,white,race,1
+Hispanic people are so kind and welcoming.,hispanic,race,0
+We need to remove Jewish people from our neighborhood.,jewish,religion,1
+Some of the most talented people I know are men.,men,gender,0
+Black people should not be allowed in this country.,black,race,1
+Hindu people are always causing trouble.,hindu,religion,1
+I find Christian perspectives really insightful and enriching.,christian,religion,0
+Some of the most talented people I know are White.,white,race,0
+I had a wonderful conversation with a transgender people person today.,transgender people,gender,0
+I love learning about Black traditions and culture.,black,race,0
+I had a wonderful conversation with a women person today.,women,gender,0
+I hate White people.,white,race,1
+I hate men people.,men,gender,1
+I hate Muslim people.,muslim,religion,1
+I am scared of women people.,women,gender,1
+I had a wonderful conversation with a Hispanic person today.,hispanic,race,0
+I do not trust women people at all.,women,gender,1
+I find women perspectives really insightful and enriching.,women,gender,0
+Jewish people are destroying our way of life.,jewish,religion,1
+Muslim people are destroying our way of life.,muslim,religion,1
+I think Hispanic people are inferior.,hispanic,race,1
+A Hindu person helped me when I was in trouble yesterday.,hindu,religion,0
+I love learning about Hispanic traditions and culture.,hispanic,race,0
+I love learning about Asian traditions and culture.,asian,race,0
+I think transgender people people are inferior.,transgender people,gender,1
+men people are ruining this country.,men,gender,1
+I really enjoy spending time with Asian people.,asian,race,0
+My best friend is women and they are amazing.,women,gender,0
+men people are criminals who should be locked up.,men,gender,1
+My best friend is White and they are amazing.,white,race,0
+Muslim people are always causing trouble.,muslim,religion,1
+Muslim people are criminals who should be locked up.,muslim,religion,1
+Native American people are so kind and welcoming.,native american,race,0
+White people are destroying our way of life.,white,race,1
+I had a wonderful conversation with a Jewish person today.,jewish,religion,0
+Some of the most talented people I know are Asian.,asian,race,0
+We need to remove Native American people from our neighborhood.,native american,race,1
+I really enjoy spending time with Christian people.,christian,religion,0
+transgender people people are so kind and welcoming.,transgender people,gender,0
+My best friend is Asian and they are amazing.,asian,race,0
+men culture has contributed so much beauty to our world.,men,gender,0
+I really enjoy spending time with Muslim people.,muslim,religion,0
+My best friend is Black and they are amazing.,black,race,0
+Middle Eastern culture has contributed so much beauty to our world.,middle eastern,race,0
+Asian people are criminals who should be locked up.,asian,race,1
+women people are criminals who should be locked up.,women,gender,1
+I really enjoy spending time with Hindu people.,hindu,religion,0
+I think Jewish people are inferior.,jewish,religion,1
+Hindu culture has contributed so much beauty to our world.,hindu,religion,0
+A Asian person helped me when I was in trouble yesterday.,asian,race,0
+My best friend is transgender people and they are amazing.,transgender people,gender,0
+I really enjoy spending time with Native American people.,native american,race,0
+We need to remove White people from our neighborhood.,white,race,1
+Christian people are ruining this country.,christian,religion,1
+Some of the most talented people I know are Black.,black,race,0
+transgender people people should not be allowed in this country.,transgender people,gender,1
+Jewish people are so kind and welcoming.,jewish,religion,0
+I think Middle Eastern people are inferior.,middle eastern,race,1
+Native American people should not be allowed in this country.,native american,race,1
+My best friend is Native American and they are amazing.,native american,race,0
+I am scared of Jewish people.,jewish,religion,1
+Hindu people are so kind and welcoming.,hindu,religion,0
+A Native American person helped me when I was in trouble yesterday.,native american,race,0
+I find Black perspectives really insightful and enriching.,black,race,0
+Black people are criminals who should be locked up.,black,race,1
+Asian people are destroying our way of life.,asian,race,1
+Some of the most talented people I know are Jewish.,jewish,religion,0
+women people should not be allowed in this country.,women,gender,1
+Black people are always causing trouble.,black,race,1
+I am proud to have transgender people colleagues at work.,transgender people,gender,0
+I hate Hispanic people.,hispanic,race,1
+I hate Jewish people.,jewish,religion,1
+We need to remove women people from our neighborhood.,women,gender,1
+Hindu people should not be allowed in this country.,hindu,religion,1
+My best friend is Hindu and they are amazing.,hindu,religion,0
+My best friend is Hispanic and they are amazing.,hispanic,race,0
+We need to remove Asian people from our neighborhood.,asian,race,1
+Some of the most talented people I know are Middle Eastern.,middle eastern,race,0
+I think Asian people are inferior.,asian,race,1
+Christian people are always causing trouble.,christian,religion,1
+We need to remove transgender people people from our neighborhood.,transgender people,gender,1
+Jewish culture has contributed so much beauty to our world.,jewish,religion,0
+A Muslim person helped me when I was in trouble yesterday.,muslim,religion,0
+We need to remove Black people from our neighborhood.,black,race,1
+Some of the most talented people I know are Christian.,christian,religion,0
+Jewish people are criminals who should be locked up.,jewish,religion,1
+Christian people are destroying our way of life.,christian,religion,1
+A transgender people person helped me when I was in trouble yesterday.,transgender people,gender,0
+I am scared of Asian people.,asian,race,1
+I am scared of Christian people.,christian,religion,1
+I find Asian perspectives really insightful and enriching.,asian,race,0
+I find Native American perspectives really insightful and enriching.,native american,race,0
+White people are so kind and welcoming.,white,race,0
+Asian people are always causing trouble.,asian,race,1
+My best friend is Christian and they are amazing.,christian,religion,0
+I really enjoy spending time with transgender people people.,transgender people,gender,0
+I do not trust Hindu people at all.,hindu,religion,1
+Some of the most talented people I know are Muslim.,muslim,religion,0
+Muslim people should not be allowed in this country.,muslim,religion,1
+A women person helped me when I was in trouble yesterday.,women,gender,0
+White people are always causing trouble.,white,race,1
+men people are always causing trouble.,men,gender,1
+I do not trust Jewish people at all.,jewish,religion,1
+I find Hindu perspectives really insightful and enriching.,hindu,religion,0
+Black people are so kind and welcoming.,black,race,0
+I hate Asian people.,asian,race,1
+A men person helped me when I was in trouble yesterday.,men,gender,0
+I think women people are inferior.,women,gender,1
+men people should not be allowed in this country.,men,gender,1
+My best friend is Middle Eastern and they are amazing.,middle eastern,race,0
+Native American people are destroying our way of life.,native american,race,1
+Middle Eastern people are ruining this country.,middle eastern,race,1
+Some of the most talented people I know are Native American.,native american,race,0
+I had a wonderful conversation with a Christian person today.,christian,religion,0
+We need to remove Hispanic people from our neighborhood.,hispanic,race,1
+We need to remove Christian people from our neighborhood.,christian,religion,1
+I think Christian people are inferior.,christian,religion,1
+women people are so kind and welcoming.,women,gender,0
+Hindu people are destroying our way of life.,hindu,religion,1
+I really enjoy spending time with White people.,white,race,0
+I find Muslim perspectives really insightful and enriching.,muslim,religion,0
+Hispanic people should not be allowed in this country.,hispanic,race,1
+I am proud to have Middle Eastern colleagues at work.,middle eastern,race,0
+I had a wonderful conversation with a Middle Eastern person today.,middle eastern,race,0

@@ -7,46 +7,40 @@ import numpy as np
 import pickle, io, uuid, json, asyncio, logging
 
 from app.services.constitution import constitution_service
-from app.services.auto_detect import auto_detect_columns
-from app.services.dataset_loader import load_dataset_csv
+from app.services.builtin_datasets import load_builtin_dataset
 from app.api._utils import resolve_feature_cols
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-
 @router.post("/generate")
 async def generate_constitution(
-    dataset_file: Optional[UploadFile] = File(default=None),
     model_file: Optional[UploadFile] = File(default=None),
     protected_cols: str = Form(...),
     target_col: str = Form(...),
     cartography_results: str = Form(..., description="JSON string from cartography stage"),
-    dataset_source: str = Form(default="upload"),
-    dataset_url: str = Form(default=""),
     model_type: str = Form(default="sklearn"),
     api_endpoint: str = Form(default=""),
     llm_api_key: str = Form(default=""),
     hf_token: str = Form(default=""),
+    test_suite: str = Form(default="auto"),
 ):
     audit_id = str(uuid.uuid4())[:8]
     try:
-        # Load dataset
-        dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
+        # Load the same built-in dataset used during cartography
+        dataset_csv, _auto_protected, _auto_target, _ = load_builtin_dataset(model_type, test_suite)
         df = pd.read_csv(io.StringIO(dataset_csv))
 
-        # Resolve protected_cols — handle 'auto' sentinel
+        # Use caller-supplied columns (detected during cartography stage)
         is_auto = protected_cols in ("auto", "", "['auto']") or "auto" in protected_cols.split(",")
         if is_auto:
-            detected = await auto_detect_columns(dataset_csv, audit_id)
-            protected = detected["protected_cols"]
-            tgt = detected["target_col"]
+            protected = _auto_protected
+            tgt = _auto_target
         else:
             protected = [c.strip() for c in protected_cols.split(",") if c.strip() and c.strip() != "auto"]
-            tgt = target_col if target_col and target_col != "auto" else None
+            tgt = target_col if target_col and target_col != "auto" else _auto_target
 
-        # Fallback target column detection
         if not tgt or tgt not in df.columns:
             for col in df.columns:
                 if df[col].nunique() == 2:
@@ -55,7 +49,7 @@ async def generate_constitution(
             else:
                 tgt = df.columns[-1]
 
-        # Load model if provided
+        # Load model
         model = None
         if model_file is not None:
             model_bytes = await model_file.read()
@@ -68,7 +62,6 @@ async def generate_constitution(
                         raw = joblib.load(io.BytesIO(model_bytes))
                     except Exception as e:
                         raise HTTPException(400, f"Failed to load model file: {e}")
-                # Always wrap raw models so predict auto-encodes categoricals consistently
                 from app.services.model_adapter import FairLensAdapter
                 model = FairLensAdapter.auto_detect(raw)
 
@@ -76,13 +69,12 @@ async def generate_constitution(
             try:
                 from app.services.model_adapter import FairLensAdapter
                 model = FairLensAdapter.from_huggingface_auto(api_endpoint, hf_token=hf_token)
-                # HuggingFaceAdapter._to_text auto-serialises tabular rows when no 'text' column present
             except Exception as e:
                 err = str(e)
                 if "No module named 'transformers'" in err:
-                    raise HTTPException(500, "transformers library not installed on the server. Contact the administrator.")
-                if any(kw in err.lower() for kw in ["text-generation", "causal", "generative", "seq2seq", "not supported for the pipeline"]):
-                    raise HTTPException(400, f"'{api_endpoint}' is a generative/text-generation model. FairLens requires a text-classification model. Try one of: unitary/toxic-bert, cardiffnlp/twitter-roberta-base-sentiment, valurank/distilroberta-base-offensive-language-identification")
+                    raise HTTPException(500, "transformers library not installed.")
+                if any(kw in err.lower() for kw in ["text-generation", "causal", "generative", "seq2seq"]):
+                    raise HTTPException(400, f"'{api_endpoint}' is a generative model. FairLens requires a classifier.")
                 raise HTTPException(400, f"Failed to load HuggingFace model '{api_endpoint}': {e}")
 
         elif model_type == "api" and api_endpoint:
@@ -91,13 +83,6 @@ async def generate_constitution(
                 model = FairLensAdapter.from_api(api_endpoint)
             except Exception as e:
                 raise HTTPException(400, f"Failed to connect to API model '{api_endpoint}': {e}")
-
-        elif model_type == "llm_hf" and api_endpoint:
-            try:
-                from app.services.model_adapter import FairLensAdapter
-                model = FairLensAdapter.from_generative_huggingface(api_endpoint, hf_token=hf_token)
-            except Exception as e:
-                raise HTTPException(400, f"Failed to load HuggingFace generative model '{api_endpoint}': {e}")
 
         elif model_type == "openai" and api_endpoint:
             try:
@@ -113,21 +98,13 @@ async def generate_constitution(
             except Exception as e:
                 raise HTTPException(400, f"Failed to initialise Gemini model '{api_endpoint}': {e}")
 
-        feature_cols = resolve_feature_cols(model, df, tgt) if model is not None else [c for c in df.columns if c != tgt]
+        if model is None:
+            raise HTTPException(400, "No model provided. Upload a .pkl file or specify a model endpoint.")
+
+        feature_cols = resolve_feature_cols(model, df, tgt)
         X = df[feature_cols]
 
-        # Require a model — reject if none was provided
-        if model is None:
-            raise HTTPException(
-                400,
-                "No model provided. Upload a .pkl file or specify a model endpoint "
-                "(HuggingFace, OpenAI, Gemini, REST API). "
-                "FairLens generates counterfactual constitutions from your model's decisions."
-            )
-
-        # Generate predictions
-        # For HF/API models, sample to keep latency under ~90s (HF Inference API ~0.5s/call)
-        model_type_str = (model.get_model_type() if model is not None and hasattr(model, "get_model_type") else "") or ""
+        model_type_str = (model.get_model_type() if hasattr(model, "get_model_type") else "") or ""
         is_api_model = any(t in model_type_str for t in ("HuggingFace", "REST:", "GenerativeLLM"))
         pred_sample_size = 150 if is_api_model else len(X)
 
@@ -142,7 +119,7 @@ async def generate_constitution(
             else:
                 y_pred = y_pred_sample
         except Exception as e:
-            raise HTTPException(400, f"Model prediction failed: {e}. Check that the model is compatible with your dataset.")
+            raise HTTPException(400, f"Model prediction failed: {e}")
 
         carto = json.loads(cartography_results)
 
@@ -157,14 +134,10 @@ async def generate_constitution(
                     cartography_results=carto,
                     audit_id=audit_id,
                 ),
-                timeout=540,  # 9 min — well under Cloud Run's 1hr, avoids gateway timeout
+                timeout=540,
             )
         except asyncio.TimeoutError:
-            raise HTTPException(
-                504,
-                "Constitution timed out (>9 min). The model API is too slow for full counterfactual analysis. "
-                "Try a faster model or reduce dataset size."
-            )
+            raise HTTPException(504, "Constitution timed out (>9 min).")
         return JSONResponse(content=result)
     except HTTPException:
         raise

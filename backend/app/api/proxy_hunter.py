@@ -1,38 +1,36 @@
 """API routes for Proxy Variable Hunter."""
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Form, HTTPException
 from fastapi.responses import JSONResponse
-from typing import Optional
 import pandas as pd, io, uuid
 
-from app.services.dataset_loader import load_dataset_csv
+from app.services.builtin_datasets import load_builtin_dataset
 
 router = APIRouter()
 
 
 @router.post("/hunt")
 async def hunt_proxies(
-    dataset_file: Optional[UploadFile] = File(default=None),
     protected_cols: str = Form(...),
     target_col: str = Form(...),
-    dataset_source: str = Form(default="upload"),
-    dataset_url: str = Form(default=""),
+    model_type: str = Form(default="sklearn"),
+    test_suite: str = Form(default="auto"),
 ):
     from app.services.proxy_hunter import proxy_hunter_service
-    from app.services.auto_detect import auto_detect_columns
 
     audit_id = str(uuid.uuid4())[:8]
     try:
-        dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
+        # Always use hiring_bias for proxy analysis (richer tabular correlations)
+        effective_suite = test_suite if test_suite != "auto" else "hiring_bias"
+        dataset_csv, _auto_protected, _auto_target, _ = load_builtin_dataset(model_type, effective_suite)
         df = pd.read_csv(io.StringIO(dataset_csv))
 
         is_auto = protected_cols in ("auto", "", "['auto']") or "auto" in protected_cols.split(",")
         if is_auto:
-            detected = await auto_detect_columns(dataset_csv, audit_id)
-            protected = detected["protected_cols"]
-            tgt = detected["target_col"]
+            protected = _auto_protected
+            tgt = _auto_target
         else:
             protected = [c.strip() for c in protected_cols.split(",") if c.strip() and c.strip() != "auto"]
-            tgt = target_col if target_col and target_col != "auto" else None
+            tgt = target_col if target_col and target_col != "auto" else _auto_target
 
         if not tgt or tgt not in df.columns:
             for col in df.columns:
