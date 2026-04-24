@@ -528,8 +528,9 @@ class GenerativeLLMAdapter(BaseModelAdapter):
                 return self._query_huggingface(prompt)
             if self.backend == "gemini":
                 return self._query_gemini(prompt)
-        except ValueError:
-            # Hard/permanent errors (e.g. 404 wrong model type) — re-raise so callers can surface them
+        except (ValueError, RuntimeError):
+            # Hard/permanent or service-level errors should abort the run so callers
+            # can surface a single actionable message instead of silently returning 0.5
             raise
         except Exception as exc:
             logger.warning(f"[GenerativeLLMAdapter] query failed: {exc}")
@@ -564,6 +565,12 @@ class GenerativeLLMAdapter(BaseModelAdapter):
                 return self._parse_response(result if isinstance(result, str) else str(result))
             except Exception as exc:
                 err_str = str(exc).lower()
+                if "429" in err_str or "too many requests" in err_str or "rate limit" in err_str:
+                    raise ValueError(
+                        f"HuggingFace rate limit reached for '{self.model_name}'. "
+                        "Cross-analysis on generative HF models makes many inference calls; "
+                        "retry later, use a valid HF token with higher limits, or switch to a text-classification model."
+                    )
                 if "401" in err_str or "403" in err_str or "unauthorized" in err_str:
                     raise ValueError(
                         f"HuggingFace model '{self.model_name}' requires authentication. "
@@ -599,6 +606,12 @@ class GenerativeLLMAdapter(BaseModelAdapter):
             headers=headers,
             timeout=90,
         )
+        if resp.status_code == 429:
+            raise ValueError(
+                f"HuggingFace rate limit reached for '{self.model_name}'. "
+                "Cross-analysis on generative HF models makes many inference calls; "
+                "retry later, use a valid HF token with higher limits, or switch to a text-classification model."
+            )
         if resp.status_code == 503:
             raise RuntimeError(f"HuggingFace model '{self.model_name}' is loading — wait ~20s and retry.")
         if resp.status_code in (401, 403):
