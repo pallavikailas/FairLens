@@ -73,12 +73,23 @@ class BiasCartographyService:
         present = [c for c in protected_cols if c in df.columns]
         if not present or target_col not in df.columns:
             return []
+
+        # y_pred: what we measure positive rates on (model output or ground truth)
         if model_predictions is not None and len(model_predictions) == len(df):
             target = pd.Series(model_predictions, index=df.index, dtype=float)
         else:
             target = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
+
+        # y_true: ground truth labels — needed for EOD/EqODD (only when predictions differ)
+        has_eod = model_predictions is not None and len(model_predictions) == len(df)
+        if has_eod:
+            y_true = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
+            y_true_bin = (y_true > 0.5).astype(int)
+            y_pred_bin = (target > 0.5).astype(int)
+
         overall_rate = float(target.mean())
         metrics = []
+
         for col in present:
             # Skip free-text columns — individual value slices are noise, not signal
             if df[col].dtype == object and df[col].nunique() > 20:
@@ -90,16 +101,30 @@ class BiasCartographyService:
                 group_rate = float(target[mask].mean())
                 spd = round(group_rate - overall_rate, 4)
                 di = round(group_rate / overall_rate, 4) if overall_rate > 0 else None
+
+                # Equal Opportunity Difference and Equalized Odds Difference
+                eod = None
+                eq_odds = None
+                if has_eod:
+                    eod, eq_odds = self._compute_eod(y_true_bin, y_pred_bin, mask)
+
+                flagged = (
+                    abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD
+                    or (di is not None and di < settings.DISPARATE_IMPACT_THRESHOLD)
+                    or (eod is not None and abs(eod) > settings.EQUAL_OPPORTUNITY_THRESHOLD)
+                    or (eq_odds is not None and eq_odds > settings.EQUALIZED_ODDS_THRESHOLD)
+                )
                 metrics.append({
                     "label": f"{col}={val}", "attribute": col, "value": str(val),
                     "size": int(mask.sum()), "positive_rate": round(group_rate, 4),
                     "overall_rate": round(overall_rate, 4),
                     "statistical_parity_diff": spd, "disparate_impact": di,
+                    "equal_opportunity_diff": eod,
+                    "equalized_odds_diff": eq_odds,
                     "bias_magnitude": round(abs(spd), 4),
-                    "flagged": abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD or (
-                        di is not None and di < settings.DISPARATE_IMPACT_THRESHOLD
-                    ),
+                    "flagged": flagged,
                 })
+
         if len(present) >= 2:
             for i, c1 in enumerate(present):
                 for c2 in present[i+1:]:
@@ -115,17 +140,68 @@ class BiasCartographyService:
                             group_rate = float(target[mask].mean())
                             spd = round(group_rate - overall_rate, 4)
                             di = round(group_rate / overall_rate, 4) if overall_rate > 0 else None
+                            eod = None
+                            eq_odds = None
+                            if has_eod:
+                                eod, eq_odds = self._compute_eod(y_true_bin, y_pred_bin, mask)
+                            flagged = (
+                                abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD
+                                or (di is not None and di < settings.DISPARATE_IMPACT_THRESHOLD)
+                                or (eod is not None and abs(eod) > settings.EQUAL_OPPORTUNITY_THRESHOLD)
+                                or (eq_odds is not None and eq_odds > settings.EQUALIZED_ODDS_THRESHOLD)
+                            )
                             metrics.append({
                                 "label": f"{c1}={v1} \u2229 {c2}={v2}", "attribute": f"{c1}+{c2}",
                                 "value": f"{v1}+{v2}", "size": int(mask.sum()),
                                 "positive_rate": round(group_rate, 4), "overall_rate": round(overall_rate, 4),
                                 "statistical_parity_diff": spd, "disparate_impact": di,
+                                "equal_opportunity_diff": eod,
+                                "equalized_odds_diff": eq_odds,
                                 "bias_magnitude": round(abs(spd), 4),
-                                "flagged": abs(spd) > settings.DEMOGRAPHIC_PARITY_THRESHOLD or (
-                                    di is not None and di < settings.DISPARATE_IMPACT_THRESHOLD
-                                ),
+                                "flagged": flagged,
                             })
         return sorted(metrics, key=lambda m: m["bias_magnitude"], reverse=True)
+
+    def _compute_eod(
+        self,
+        y_true: "pd.Series",
+        y_pred: "pd.Series",
+        mask: "pd.Series",
+    ):
+        """
+        Returns (equal_opportunity_diff, equalized_odds_diff) for a demographic slice.
+
+        Equal Opportunity Diff = TPR_group - TPR_overall
+        Equalized Odds Diff    = max(|TPR diff|, |FPR diff|)
+
+        Returns (None, None) when a denominator is zero (no positives or negatives overall).
+        """
+        # Overall rates
+        pos_overall = y_true == 1
+        neg_overall = y_true == 0
+
+        tpr_overall = float(y_pred[pos_overall].mean()) if pos_overall.sum() > 0 else None
+        fpr_overall = float(y_pred[neg_overall].mean()) if neg_overall.sum() > 0 else None
+
+        if tpr_overall is None:
+            return None, None
+
+        # Group rates
+        pos_group = pos_overall & mask
+        neg_group = neg_overall & mask
+
+        if pos_group.sum() < 2:
+            return None, None
+
+        tpr_group = float(y_pred[pos_group].mean())
+        eod = round(tpr_group - tpr_overall, 4)
+
+        eq_odds = None
+        if fpr_overall is not None and neg_group.sum() >= 2:
+            fpr_group = float(y_pred[neg_group].mean())
+            eq_odds = round(max(abs(eod), abs(fpr_group - fpr_overall)), 4)
+
+        return eod, eq_odds
 
     async def _gemini_analyse(self, df, protected_cols, target_col, slice_metrics, audit_id, using_model_predictions=False):
         top_slices = json.dumps(slice_metrics[:10], indent=2)
@@ -197,7 +273,20 @@ Return ONLY this JSON:
         avg_di_penalty = float(np.mean(di_penalties)) if di_penalties else 0.0
         flagged_ratio = sum(1 for m in single if m.get("flagged")) / max(len(single), 1)
 
-        raw = 100 - (avg_spd * 200) - (avg_di_penalty * 100) - (flagged_ratio * 20)
+        # Penalise for Equal Opportunity and Equalized Odds violations
+        eod_values = [abs(m["equal_opportunity_diff"]) for m in single if m.get("equal_opportunity_diff") is not None]
+        avg_eod_penalty = float(np.mean(eod_values)) if eod_values else 0.0
+        eq_odds_values = [m["equalized_odds_diff"] for m in single if m.get("equalized_odds_diff") is not None]
+        avg_eq_odds_penalty = float(np.mean(eq_odds_values)) if eq_odds_values else 0.0
+
+        raw = (
+            100
+            - (avg_spd * 200)
+            - (avg_di_penalty * 100)
+            - (flagged_ratio * 20)
+            - (avg_eod_penalty * 100)
+            - (avg_eq_odds_penalty * 80)
+        )
         score = int(max(0, min(100, round(raw))))
 
         if score >= 80:

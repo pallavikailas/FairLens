@@ -18,9 +18,30 @@ logger = logging.getLogger(__name__)
 
 # Common protected attribute keywords for fast detection
 PROTECTED_KEYWORDS = [
+    # Original protected attributes
     'gender', 'sex', 'race', 'ethnicity', 'ethnic', 'nationality', 'nation',
     'religion', 'age', 'disability', 'marital', 'pregnant', 'orientation',
     'colour', 'color', 'caste', 'tribe', 'indigenous', 'veteran',
+    # Socioeconomic status
+    'income', 'wealth', 'poverty', 'socioeconomic', 'ses', 'economic_class',
+    'financial_status', 'low_income', 'welfare', 'benefit',
+    # Educational background
+    'education', 'degree', 'credential', 'diploma', 'college', 'school',
+    'qualification', 'literacy', 'educated',
+    # Geographic / zip code (redlining-adjacent)
+    'zip', 'zipcode', 'zip_code', 'postal', 'postcode', 'neighbourhood',
+    'neighborhood', 'district', 'borough', 'precinct',
+    # Language / accent
+    'language', 'accent', 'linguistic', 'dialect', 'native_language',
+    'first_language', 'english_proficiency',
+    # Criminal history
+    'criminal', 'conviction', 'convicted', 'arrest', 'arrested', 'felony',
+    'misdemeanor', 'offense', 'incarcerated', 'prior_record', 'background_check',
+    # Political affiliation
+    'political', 'party', 'affiliation', 'ideology', 'partisan',
+    # Physical appearance
+    'appearance', 'height', 'weight', 'bmi', 'obesity', 'obese',
+    'physical_appearance', 'attractiveness',
 ]
 
 # Common target column keywords
@@ -76,7 +97,14 @@ async def auto_detect_columns(dataset_csv: str, audit_id: str = "") -> Dict:
 
     prompt = f"""You are analysing a dataset to find bias. Identify:
 1. Which columns contain PROTECTED ATTRIBUTES (demographic info that should not influence decisions):
-   - Gender, sex, race, ethnicity, age, nationality, religion, disability, marital status, etc.
+   - Gender, sex, race, ethnicity, age, nationality, religion, disability, marital status
+   - Socioeconomic status: income level, wealth, poverty, financial class
+   - Educational background: degree, credential, diploma, qualification
+   - Geographic: zip code, postal code, neighbourhood, district (redlining-adjacent proxies)
+   - Language / accent: native language, English proficiency, linguistic background
+   - Criminal history: prior convictions, arrests, felonies, background check results
+   - Political affiliation: party membership, ideology, partisan leanings
+   - Physical appearance: height, weight, BMI, obesity
 2. Which column is the TARGET variable (what the model predicts / the decision being made):
    - hired, approved, loan_granted, admitted, diagnosed, fraud, etc.
 

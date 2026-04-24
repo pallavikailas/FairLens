@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # Fairness thresholds (industry standard)
     DEMOGRAPHIC_PARITY_THRESHOLD: float = 0.1
     DISPARATE_IMPACT_THRESHOLD: float = 0.8
+    EQUAL_OPPORTUNITY_THRESHOLD: float = 0.1   # max allowed TPR difference across groups
+    EQUALIZED_ODDS_THRESHOLD: float = 0.1      # max allowed max(|TPR diff|, |FPR diff|)
 
     # CORS
     ALLOWED_ORIGINS: List[str] = [
