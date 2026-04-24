@@ -134,3 +134,23 @@ def test_from_huggingface_auto_uses_normalized_auth_header(monkeypatch):
     assert isinstance(adapter, HuggingFaceAdapter)
     assert adapter.hf_token == "hf_header_test"
     assert captured["headers"]["Authorization"] == "Bearer hf_header_test"
+
+
+def test_generative_hf_429_is_raised_as_actionable_value_error(monkeypatch):
+    adapter = FairLensAdapter.from_generative_huggingface(
+        "EleutherAI/gpt-neo-1.3B",
+        hf_token="hf_test",
+    )
+
+    class FakeInferenceClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def text_generation(self, *args, **kwargs):
+            raise Exception("429 Too Many Requests: you have reached your api rate limit.")
+
+    import huggingface_hub
+    monkeypatch.setattr(huggingface_hub, "InferenceClient", FakeInferenceClient)
+
+    with pytest.raises(ValueError, match="rate limit reached"):
+        adapter.predict_proba(pd.DataFrame({"text": ["hello world"]}))
