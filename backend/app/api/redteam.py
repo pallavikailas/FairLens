@@ -81,6 +81,8 @@ async def run_redteam(
 
     try:
         dataset_csv = await load_dataset_csv(dataset_file, dataset_source, dataset_url)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(400, f"Failed to load dataset: {e}")
 

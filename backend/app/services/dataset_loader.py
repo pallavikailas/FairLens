@@ -7,17 +7,24 @@ Returns CSV string in all cases so callers can pd.read_csv(io.StringIO(csv)).
 import asyncio
 import io
 import logging
+import time
+from typing import Optional, Tuple
 
 import httpx
 import pandas as pd
 from fastapi import HTTPException, UploadFile
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 _HF_SERVER = "https://datasets-server.huggingface.co"
 _HF_HUB = "https://huggingface.co"
 _MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
+
+# In-memory cache for HuggingFace datasets.
+# Keyed by dataset name; value is (csv_string, loaded_at_timestamp).
+# Entries expire after 10 minutes so a session's 4+ pipeline stages share one HF fetch.
+_HF_CACHE: dict[str, Tuple[str, float]] = {}
+_HF_CACHE_TTL = 600  # seconds
 
 
 async def _get_with_retry(client: httpx.AsyncClient, url: str, max_retries: int = 3, **kwargs) -> httpx.Response:
@@ -51,7 +58,15 @@ async def load_dataset_csv(
             return resp.text
 
     if dataset_source == "huggingface":
-        return await _load_huggingface(dataset_url.strip())
+        name = dataset_url.strip()
+        # Serve from cache if the same dataset was fetched recently in this process.
+        cached = _HF_CACHE.get(name)
+        if cached and (time.time() - cached[1]) < _HF_CACHE_TTL:
+            logger.info(f"[HF cache hit] Returning cached CSV for '{name}'")
+            return cached[0]
+        csv = await _load_huggingface(name)
+        _HF_CACHE[name] = (csv, time.time())
+        return csv
 
     if dataset_source == "kaggle":
         raise HTTPException(
@@ -73,17 +88,31 @@ async def _load_huggingface(name: str) -> str:
     async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
 
         # --- Strategy 1: datasets-server /rows ---
+        # Detect the correct config+split. If the info endpoint fails with a non-200,
+        # raise immediately rather than silently proceeding with wrong defaults.
         config, split = "default", "train"
-        try:
-            info = (await _get_with_retry(client, f"{_HF_SERVER}/info?dataset={name}")).json()
+        info_resp = await _get_with_retry(client, f"{_HF_SERVER}/info?dataset={name}")
+        if info_resp.status_code == 401:
+            raise HTTPException(
+                400,
+                f"HuggingFace dataset '{name}' is gated or private. "
+                f"Download the CSV manually from huggingface.co/datasets/{name} and upload it directly."
+            )
+        if info_resp.status_code == 404:
+            raise HTTPException(
+                400,
+                f"HuggingFace dataset '{name}' was not found. "
+                f"Check the dataset name at huggingface.co/datasets."
+            )
+        if info_resp.status_code == 200:
+            info = info_resp.json()
             configs = list(info.get("dataset_info", {}).keys())
             if configs:
                 config = configs[0]
             splits = list(info.get("dataset_info", {}).get(config, {}).get("splits", {}).keys())
             if splits:
                 split = splits[0]
-        except Exception:
-            pass
+        # Non-200 other than 401/404 (e.g. 429, 503): fall through and let the rows request fail visibly.
 
         rows_resp = await _get_with_retry(
             client,
@@ -94,6 +123,9 @@ async def _load_huggingface(name: str) -> str:
             if rows:
                 logger.info(f"[HF] Loaded {len(rows)} rows via datasets-server for {name}")
                 return pd.DataFrame([r["row"] for r in rows]).to_csv(index=False)
+            logger.info(f"[HF] datasets-server returned 0 rows for {name} — falling through to file listing")
+        else:
+            logger.info(f"[HF] datasets-server /rows returned {rows_resp.status_code} for {name} — falling through")
 
         # --- Strategy 2: Hub file listing → CSV/JSON ---
         try:
