@@ -36,10 +36,9 @@ All adapters expose the same interface:
 from __future__ import annotations
 
 import abc
-import json
 import logging
 import os
-from typing import Any, Callable, Optional, List
+from typing import Any, Callable, Optional
 
 import numpy as np
 import pandas as pd
