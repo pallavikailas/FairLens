@@ -409,14 +409,26 @@ class FairnessRedTeamAgent:
                     else:
                         thresholds = self._compute_group_thresholds(model, X_train, y_train, attr)
                         state["group_thresholds"] = thresholds
-                        log.append(f"[Patcher Agent] Model not retrainable — applied threshold adjustment instead")
-                        patch_results["applied"].append({"strategy": "threshold_adjustment", "attribute": attr})
+                        log.append(f"[Patcher Agent] Per-group thresholds computed for '{attr}': {thresholds} (advisory only; not yet enforced in model export)")
+                        patch_results["failed"].append({
+                            "strategy": strategy,
+                            "attribute": attr,
+                            "error": "thresholds computed but not applied in exported model or validator"
+                        })
 
                 elif strategy == "threshold_adjustment":
                     thresholds = self._compute_group_thresholds(model, X_train, y_train, attr)
                     state["group_thresholds"] = thresholds
-                    log.append(f"[Patcher Agent] Per-group thresholds computed: {thresholds}")
-                    patch_results["applied"].append({"strategy": strategy, "attribute": attr})
+                    log.append(
+                        f"[Patcher Agent] Per-group thresholds computed for '{attr}': {thresholds} "
+                        "(advisory only; not yet enforced in model export or validator)"
+                    )
+                    patch_results["failed"].append({
+                        "strategy": strategy,
+                        "attribute": attr,
+                        "error": "thresholds computed but not applied in exported model or validator",
+                    })
+
 
                 elif strategy == "demographic_parity_correction":
                     audit_results = state.get("audit_results", {})
@@ -572,9 +584,10 @@ class FairnessRedTeamAgent:
             "completed_at":      datetime.utcnow().isoformat(),
             "iterations":        state.get("iteration", 0),
             "biases_targeted":   len(state.get("confirmed_biases", [])),
-            "patches_applied":   len(patch_results.get("applied", [])),
-            "patches_failed":    len(patch_results.get("failed", [])),
-            "biases_improved":   len(validation.get("improved", [])),
+            "patches_applied":      len(patch_results.get("applied", [])),
+            "patches_failed":       len(patch_results.get("failed", [])),
+            "patches_failed_items": patch_results.get("failed", []),
+            "biases_improved":      len(validation.get("improved", [])),
             "biases_regressed":  len(validation.get("regressed", [])),
             "biases_unchanged":  len(validation.get("unchanged", [])),
             "validation":        validation,

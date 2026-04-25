@@ -282,7 +282,7 @@ export default function RedTeamPage() {
                   </div>
                   <div className="text-white/50 text-xs font-mono">
                     The agent applied mitigation patches and confirmed improvement across {improved.length} attribute{improved.length > 1 ? 's' : ''}.
-                    {(report.patches_failed?.length > 0) && ` ${report.patches_failed.length} attribute(s) could not be patched.`}
+                    {(report.patches_failed ?? 0) > 0 && ` ${report.patches_failed} attribute(s) could not be patched.`}
                   </div>
                 </div>
               </div>
@@ -301,7 +301,7 @@ export default function RedTeamPage() {
                 { label: 'Iterations', value: report.iterations || 1, color: 'text-white' },
                 { label: 'Patches Applied', value: patchesApplied, color: 'text-signal-green' },
                 { label: 'Biases Improved', value: improved.length, color: 'text-signal-green' },
-                { label: 'Patches Failed', value: report.patches_failed?.length ?? 0, color: report.patches_failed?.length > 0 ? 'text-signal-red' : 'text-white/30' },
+                { label: 'Patches Failed', value: report.patches_failed ?? 0, color: (report.patches_failed ?? 0) > 0 ? 'text-signal-red' : 'text-white/30' },
               ].map((card, i) => (
                 <div key={i} className="glass rounded-2xl p-5 border border-white/5">
                   <div className="text-white/30 text-xs font-mono mb-2">{card.label}</div>
@@ -424,9 +424,9 @@ export default function RedTeamPage() {
                   <div className="text-xs font-mono text-white/30 space-y-1 mt-2">
                     <div className="text-white/50 mb-1">How to use:</div>
                     <div>1. Load the .pkl file with <span className="text-lens-light">joblib.load()</span> or <span className="text-lens-light">pickle.load()</span></div>
-                    <div>2. The model includes per-group correction factors applied at prediction time</div>
-                    <div>3. Use <span className="text-lens-light">model.predict(X)</span> as normal — fairness corrections are automatic</div>
-                    <div>4. Re-run FairLens on the remediated model to verify compliance</div>
+                    <div>2. Retrained model changes are included only when FairLens actually re-fit the underlying model</div>
+                    <div>3. Thresholds or correction factors are reported separately and must be applied in your serving layer</div>
+                    <div>4. Re-run FairLens on the deployed remediation flow to verify compliance</div>
                   </div>
                 </div>
               )}
