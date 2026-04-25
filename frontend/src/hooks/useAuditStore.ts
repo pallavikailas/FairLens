@@ -28,6 +28,7 @@ export interface AuditSession {
 
   confirmedBiases: any[]
   stage: 'upload' | 'model_probe' | 'dataset_probe' | 'cross_analysis' | 'review' | 'redteam' | 'done'
+  activeSubStage: string | null
   loading: boolean
   error: string | null
 }
@@ -53,6 +54,7 @@ interface AuditStore extends AuditSession {
   setProxyResults: (r: any) => void
   setConfirmedBiases: (b: any[]) => void
   setStage: (s: AuditSession['stage']) => void
+  setActiveSubStage: (s: string | null) => void
   setLoading: (v: boolean) => void
   setError: (e: string | null) => void
   reset: () => void
@@ -78,6 +80,7 @@ const initial: AuditSession = {
   proxyResults: null,
   confirmedBiases: [],
   stage: 'upload',
+  activeSubStage: null,
   loading: false,
   error: null,
 }
@@ -103,6 +106,7 @@ export const useAuditStore = create<AuditStore>((set) => ({
   setProxyResults:         (proxyResults)         => set({ proxyResults }),
   setConfirmedBiases:      (confirmedBiases)      => set({ confirmedBiases }),
   setStage:                (stage)                => set({ stage }),
+  setActiveSubStage:       (activeSubStage)       => set({ activeSubStage }),
   setLoading:              (loading)              => set({ loading }),
   setError:                (error)                => set({ error }),
   reset:                   ()                     => set(initial),
