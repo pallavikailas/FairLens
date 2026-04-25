@@ -14,22 +14,22 @@
 
 ## What is FairLens?
 
-FairLens is a **model-agnostic** AI bias detection and remediation platform. Upload a dataset and a model — FairLens runs both through a six-stage pipeline that identifies, maps, explains, and fixes hidden bias.
+FairLens is a **model-agnostic** AI bias detection and remediation platform. Upload a model (and optionally a dataset) — FairLens runs a three-phase pipeline that identifies, maps, explains, and fixes hidden bias.
 
 It works as a **plugin for any model** — scikit-learn, HuggingFace classifiers, generative LLMs (OpenAI, Gemini), a REST API, or a Vertex AI endpoint — with zero code changes to your model.
 
 ---
 
-## The Six Stages
+## The Three-Phase Pipeline
 
-| # | Stage | What it does |
-|---|-------|-------------|
-| 1 | **Upload** | Dataset (CSV or HuggingFace dataset ID) + model. 6 model types supported. Column auto-detection handles the rest. |
-| 2 | **Bias Cartography** | Maps bias across intersectional identity slices using SPD, Disparate Impact, and Equalized Odds metrics + Gemini 2.5 Flash synthesis. |
-| 3 | **Counterfactual Constitution** | Generates a structured document showing what the model decides when only demographics change — batch-predicting flipped attribute pairs. |
-| 4 | **Proxy Variable Hunter** | Traces indirect proxy chains (zip code → race, job title → gender) using a NetworkX correlation graph + Vertex AI text-embedding-004 for semantic scoring. Dataset-only, no model calls. |
-| 5 | **Review** | Interactive results dashboard with FairScore™, regulatory compliance tags (EEOC, EU AI Act, ECOA, Fair Housing Act), bias topology map, and proxy chain graph. User confirms which biases to target. |
-| 6 | **Red-Team Agent** | LangGraph adversarial agent: generates demographic probes, measures disparity, applies type-aware mitigation patches, validates fixes — streamed live via SSE. |
+| Phase | Name | What it does |
+|-------|------|-------------|
+| **Configure** | Upload | Model (required) + dataset (optional). 6 model types supported. Column auto-detection handles the rest. |
+| **Phase 1** | **Model Probe** | Probes the model on an embedded 300-row synthetic reference dataset to reveal hidden bias intrinsic to the model — no user dataset required. Runs Bias Cartography + Counterfactual Constitution on the probe data. |
+| **Phase 2** | **Dataset Analysis** | *(Requires dataset)* Maps bias patterns in your dataset using Bias Cartography (SPD, Disparate Impact, Equalized Odds + Gemini 2.5 Flash) and Proxy Variable Hunt (zip code → race, job title → gender chains via NetworkX + Vertex AI embeddings). |
+| **Phase 3** | **Cross-Analysis** | *(Requires model + dataset)* Runs Cartography, Counterfactual Constitution, and Proxy Hunt on the actual model × user dataset combination to measure real-world deployment bias. |
+| **Review** | **Results** | Interactive results dashboard with FairScore™, regulatory compliance tags (EEOC, EU AI Act, ECOA, Fair Housing Act), bias topology map, and proxy chain graph. All three phases shown separately; confirmed biases pooled at the bottom. User selects biases to target. |
+| **Red-Team** | **Remediation** | LangGraph adversarial agent: generates demographic probes, confirms user-selected biases, applies type-aware mitigation patches (reweighing / threshold adjustment / demographic parity correction / prompt constraints), validates fixes — streamed live via SSE. |
 
 ---
 
@@ -80,7 +80,7 @@ This exercises the full pipeline: the dataset has a `text` column (required for 
 flowchart TD
     U([👤 User]) --> FE[React Frontend\nVite · Tailwind · D3 · Framer Motion]
 
-    FE -->|Dataset + model| API[FastAPI Backend\nCloud Run · Python 3.11]
+    FE -->|Model + optional dataset| API[FastAPI Backend\nCloud Run · Python 3.11]
 
     subgraph PLUGIN ["🔌 Universal Model Adapter"]
         API --> AD{Model Type?}
@@ -93,38 +93,40 @@ flowchart TD
         SKL & HF & GEN & LLM & REST & VAD --> IFC[BaseModelAdapter\npredict · predict_proba · get_model_type]
     end
 
-    subgraph STAGE2 ["⬡ Stage 2 — Bias Cartography"]
-        IFC --> IS[Intersectional Slices\nSPD · Disparate Impact · Equalized Odds]
-        IS --> GM1["✦ Gemini 2.5 Flash\nbias hotspot synthesis"]
-        GM1 --> FM[FairScore™ · Hotspot Map · Compliance Tags]
+    subgraph PHASE1 ["⬡ Phase 1 — Model Probe (model-only, no dataset needed)"]
+        IFC --> REF[Embedded 300-row Reference Dataset\nfeature-matched + demographic injection]
+        REF --> P1C[Bias Cartography\nSPD · Disparate Impact · Equalized Odds]
+        P1C --> P1K[Counterfactual Constitution\nflip demographics → measure decision flips]
+        P1K --> MB[Hidden Bias List\nranked by magnitude]
     end
 
-    subgraph STAGE3 ["◍ Stage 3 — Counterfactual Constitution"]
-        FM --> CF[Counterfactual Pair Generation\nbatch-predict: flip protected attributes]
-        CF --> GM2["✦ Gemini 2.5 Flash\nconstitution document synthesis"]
-        GM2 --> CD[7-Section Constitution\nExecutive Summary · Legal Risk · Remediation]
+    subgraph PHASE2 ["◍ Phase 2 — Dataset Analysis (optional, requires dataset)"]
+        API --> DS[User Dataset\nCSV upload · HuggingFace dataset ID]
+        DS --> P2C[Bias Cartography + Gemini 2.5 Flash\nFairScore™ · Hotspot Map · Compliance Tags]
+        P2C --> P2P[Proxy Variable Hunter\nNetworkX DiGraph · Vertex AI text-embedding-004\nzip code→race · job title→gender chains]
     end
 
-    subgraph STAGE4 ["◈ Stage 4 — Proxy Variable Hunter"]
-        CD --> CG[NetworkX DiGraph\ncorrelation graph of all features]
-        CG --> VE["✦ Vertex AI text-embedding-004\nsemantic similarity scoring"]
-        VE --> RS[Risk Scoring: critical · high · medium · low]
+    subgraph PHASE3 ["◈ Phase 3 — Cross-Analysis (requires model + dataset)"]
+        MB & P2P --> P3C[Cartography on model × dataset]
+        P3C --> P3K[Counterfactual Constitution]
+        P3K --> P3P[Proxy Hunt]
+        P3P --> SYN["✦ Gemini 2.5 Flash\ncross-synthesis: model vs dataset bias comparison"]
     end
 
-    subgraph REVIEW ["👁 Stage 5 — Review & Confirmation"]
-        RS --> UI[Results Dashboard\nBias Map · Constitution · Proxy Graph]
+    subgraph REVIEW ["👁 Review & Confirmation"]
+        SYN --> UI[Results Dashboard\nPhase 1 · Phase 2 · Phase 3 tabs\nBias Map · Constitution · Proxy Graph]
         UI --> CB{User confirms\nbiases to target}
     end
 
-    subgraph STAGE6 ["⊘ Stage 6 — Red-Team Agent  〔 SSE live stream 〕"]
+    subgraph REDTEAM ["⊘ Red-Team Agent  〔 SSE live stream 〕"]
         CB -->|Yes| LG[LangGraph Orchestrator]
         LG --> AA["⚔ Attack Agent\nadversarial demographic probes"]
-        AA --> EA["🔬 Evaluator Agent\nbatch-predict · measure disparity"]
+        AA --> EA["🔬 Evaluator Agent\nbatch-predict · measure disparity\nalways confirms user-selected biases"]
         EA --> DA["⚖ Decision Agent\ntype-aware mitigation selection"]
-        DA --> PA["🔧 Patcher Agent\nsklearn: reweighing / threshold / ablation\nLLM: prompt fairness constraint\nHF/REST: threshold adjustment"]
+        DA --> PA["🔧 Patcher Agent\nsklearn: reweighing / threshold / ablation\nLLM: prompt fairness constraint\nHF/REST: demographic parity correction"]
         PA --> VA["✓ Validator Agent\nre-evaluate · flag regressions"]
         VA -->|regressions & iter < 3| AA
-        VA -->|fixed| RA["📋 Report Agent\nfinal structured summary"]
+        VA -->|fixed| RA["📋 Report Agent\nfinal structured summary + PDF"]
     end
 
     subgraph GCP ["☁ Google Cloud Platform"]
@@ -136,8 +138,9 @@ flowchart TD
         SM[Secret Manager]
     end
 
-    GM2 --> VAI
-    VE --> VAI
+    P2C --> VAI
+    P3K --> VAI
+    P2P --> VAI
     LG --> VAI
     API --> CR
 
@@ -145,10 +148,10 @@ flowchart TD
     SSE --> FE
 
     style PLUGIN fill:#0d1117,stroke:#7c3aed,color:#a78bfa
-    style STAGE2 fill:#0d0d1a,stroke:#7c3aed,color:#c4b5fd
-    style STAGE3 fill:#0d0d1a,stroke:#3b82f6,color:#93c5fd
-    style STAGE4 fill:#0d0d1a,stroke:#10b981,color:#6ee7b7
-    style STAGE6 fill:#1a0d0d,stroke:#ef4444,color:#fca5a5
+    style PHASE1 fill:#0d0d1a,stroke:#7c3aed,color:#c4b5fd
+    style PHASE2 fill:#0d0d1a,stroke:#3b82f6,color:#93c5fd
+    style PHASE3 fill:#0d0d1a,stroke:#10b981,color:#6ee7b7
+    style REDTEAM fill:#1a0d0d,stroke:#ef4444,color:#fca5a5
     style REVIEW fill:#0d1a0d,stroke:#22c55e,color:#86efac
     style GCP fill:#0d0d1a,stroke:#3b82f6,color:#93c5fd
 ```
@@ -222,15 +225,23 @@ fairlens/
 │   └── deploy.yml                  # Docker → Artifact Registry → Cloud Run
 ├── backend/
 │   ├── app/
-│   │   ├── api/                    # FastAPI route handlers (one per stage)
+│   │   ├── api/                    # FastAPI route handlers (one per phase)
+│   │   │   ├── model_probe.py      # Phase 1: model probe endpoint
+│   │   │   ├── dataset_probe.py    # Phase 2: dataset-only analysis endpoint
+│   │   │   ├── cross_analysis.py   # Phase 3: model × dataset cross-analysis endpoint
+│   │   │   ├── redteam.py          # Red-Team: SSE-streamed LangGraph agent
+│   │   │   ├── reports.py          # PDF report generation endpoint
 │   │   │   └── _utils.py           # Shared helpers
 │   │   ├── core/config.py          # GCP project, Vertex AI, fairness thresholds
 │   │   └── services/
 │   │       ├── model_adapter.py    # Universal plugin adapter (all model types)
-│   │       ├── cartography.py      # Stage 2: statistical bias mapping + Gemini
-│   │       ├── constitution.py     # Stage 3: counterfactual simulation + Gemini
-│   │       ├── proxy_hunter.py     # Stage 4: NetworkX proxy chains + Vertex AI
-│   │       ├── redteam.py          # Stage 6: LangGraph adversarial agent
+│   │       ├── model_probe.py      # Phase 1: probes model on embedded reference dataset
+│   │       ├── reference_dataset.py# Embedded 300-row reference dataset + model-specific probe
+│   │       ├── cartography.py      # Bias Cartography: SPD · DI · EO + Gemini synthesis
+│   │       ├── constitution.py     # Counterfactual Constitution + Gemini synthesis
+│   │       ├── proxy_hunter.py     # Proxy Variable Hunt: NetworkX + Vertex AI embeddings
+│   │       ├── redteam.py          # LangGraph adversarial red-team agent
+│   │       ├── report_generator.py # ReportLab PDF generator (all 3 phases)
 │   │       ├── dataset_loader.py   # CSV upload + HuggingFace dataset streaming
 │   │       ├── auto_detect.py      # Gemini-powered column detection
 │   │       └── gemini_client.py    # Vertex AI / Gemini client
@@ -240,10 +251,12 @@ fairlens/
 │   └── src/
 │       ├── pages/
 │       │   ├── LandingPage.tsx
-│       │   ├── AuditPage.tsx       # Stage 1: model type + dataset config
-│       │   ├── ResultsPage.tsx     # Stage 5: FairScore™ · bias map · proxy graph
-│       │   └── RedTeamPage.tsx     # Stage 6: live SSE agent feed
-│       ├── hooks/useAuditStore.ts  # Zustand global state (all 6 stages)
+│       │   ├── AuditPage.tsx       # Configure + runs all 3 phases with sub-stage tracking
+│       │   ├── ResultsPage.tsx     # Phase 1/2/3 tabs + pooled bias confirmation
+│       │   └── RedTeamPage.tsx     # Live SSE red-team agent feed
+│       ├── components/
+│       │   └── Layout.tsx          # Nav with phase progress + sub-stage indicator strip
+│       ├── hooks/useAuditStore.ts  # Zustand global state (3-phase results + activeSubStage)
 │       └── utils/api.ts            # Typed fetch wrappers + SSE consumer
 ├── infrastructure/
 │   └── terraform/main.tf           # Cloud Run · Artifact Registry · BigQuery · GCS · IAM

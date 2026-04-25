@@ -322,33 +322,40 @@ class FairnessRedTeamAgent:
             carto_spd[attr] = max(carto_spd.get(attr, 0), spd)
 
         evaluated_attrs = {e["attribute"] for e in evaluation}
+        confirmed_attr_magnitudes = {
+            b.get("attribute", ""): b.get("magnitude", 0)
+            for b in confirmed_biases if b.get("attribute")
+        }
 
-        # Add entries for confirmed biases that have no probes but have cartography signal
+        # Add entries for confirmed biases that have no probes
         for bias in confirmed_biases:
             attr = bias.get("attribute", "")
             if not attr or attr in evaluated_attrs:
                 continue
             cspd = carto_spd.get(attr, 0)
-            if cspd >= settings.DEMOGRAPHIC_PARITY_THRESHOLD:
-                log.append(
-                    f"[Evaluator Agent] '{attr}': no probes generated (high-cardinality text or skipped). "
-                    f"Cartography confirms SPD={cspd:.3f} — adding to evaluation."
-                )
-                evaluation.append({
-                    "attribute": attr,
-                    "disparity": round(cspd, 4),
-                    "bias_confirmed": True,
-                    "bias_source": "cartography",
-                    "sample_count": 0,
-                })
-                evaluated_attrs.add(attr)
+            # Always use the higher of cartography SPD or user-reported magnitude
+            magnitude = max(cspd, bias.get("magnitude", 0)) or 0.1
+            log.append(
+                f"[Evaluator Agent] '{attr}': user-confirmed bias — adding to evaluation "
+                f"(carto SPD={cspd:.3f}, user magnitude={bias.get('magnitude', 0):.3f})"
+            )
+            evaluation.append({
+                "attribute": attr,
+                "disparity": round(magnitude, 4),
+                "bias_confirmed": True,
+                "bias_source": "cartography" if cspd >= settings.DEMOGRAPHIC_PARITY_THRESHOLD else "user_confirmed",
+                "sample_count": 0,
+            })
+            evaluated_attrs.add(attr)
 
-        # Upgrade near-zero probe disparities when cartography shows high SPD
+        # Upgrade near-zero probe disparities for user-confirmed biases and high-SPD cartography
         for e in evaluation:
-            if e.get("bias_confirmed") or e.get("bias_source") == "cartography":
+            if e.get("bias_confirmed"):
                 continue
             attr = e["attribute"]
             cspd = carto_spd.get(attr, 0)
+            user_magnitude = confirmed_attr_magnitudes.get(attr, 0)
+            # Upgrade if cartography shows SPD above threshold
             if cspd >= settings.DEMOGRAPHIC_PARITY_THRESHOLD:
                 e["disparity"] = round(cspd, 4)
                 e["bias_confirmed"] = True
@@ -356,6 +363,16 @@ class FairnessRedTeamAgent:
                 log.append(
                     f"[Evaluator Agent] '{attr}': probe disparity≈0 (model reads text, ignores "
                     f"tabular column). Cartography confirms SPD={cspd:.3f} — upgraded to confirmed."
+                )
+            # Also upgrade if user explicitly confirmed this bias
+            elif attr in confirmed_attr_magnitudes:
+                magnitude = max(e["disparity"], user_magnitude) or 0.1
+                e["disparity"] = round(magnitude, 4)
+                e["bias_confirmed"] = True
+                e["bias_source"] = "user_confirmed"
+                log.append(
+                    f"[Evaluator Agent] '{attr}': user-confirmed bias — upgraded to confirmed "
+                    f"(probe disparity={e['disparity']:.3f})"
                 )
 
         return evaluation
@@ -617,7 +634,7 @@ class FairnessRedTeamAgent:
         if is_generative:
             return {"name": "prompt_fairness_constraint", "rationale": "Generative LLM — add explicit fairness instructions to the decision prompt"}
         if not is_trainable:
-            if disparity > 0.2 or bias_source == "cartography":
+            if disparity > 0.2 or bias_source in ("cartography", "user_confirmed"):
                 return {"name": "demographic_parity_correction", "rationale": "External model with high disparity — compute post-hoc per-group correction factors from cartography to equalise positive rates"}
             return {"name": "threshold_adjustment", "rationale": "External model — per-group thresholds equalise prediction rates"}
         if disparity > 0.3:

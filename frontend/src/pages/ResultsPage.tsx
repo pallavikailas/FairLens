@@ -6,7 +6,9 @@ import ReactMarkdown from 'react-markdown'
 import { useAuditStore } from '../hooks/useAuditStore'
 import { exportPdfReport } from '../utils/api'
 
-// ── Bias Map (D3 scatter) ─────────────────────────────────────────────────
+// ── Bias Map (D3 scatter — per demographic slice) ─────────────────────────
+// Each dot = one demographic group. x = SPD, y = positive rate.
+// Red = biased/flagged, green = fair. Size ∝ group size.
 function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
   const ref = useRef<SVGSVGElement>(null)
 
@@ -15,72 +17,124 @@ function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
     const svg = d3.select(ref.current)
     svg.selectAll('*').remove()
 
-    const W = ref.current.clientWidth || 480
-    const H = 320
-    const margin = { top: 16, right: 16, bottom: 32, left: 32 }
+    const W = ref.current.clientWidth || 520
+    const H = 360
+    const margin = { top: 24, right: 24, bottom: 52, left: 60 }
     const w = W - margin.left - margin.right
     const h = H - margin.top - margin.bottom
 
     const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`)
 
-    const xExt = d3.extent(points, (d: any) => d.x) as [number, number]
-    const yExt = d3.extent(points, (d: any) => d.y) as [number, number]
-    const xScale = d3.scaleLinear().domain(xExt).range([0, w])
-    const yScale = d3.scaleLinear().domain(yExt).range([h, 0])
-    const colorScale = d3.scaleSequential(d3.interpolateRdYlGn).domain([1, 0])
+    // Domains — SPD on x, positive rate on y
+    const xVals = points.map((d: any) => d.x)
+    const xMax  = Math.max(Math.abs(d3.min(xVals) as number), Math.abs(d3.max(xVals) as number), 0.05)
+    const xScale = d3.scaleLinear().domain([-xMax * 1.2, xMax * 1.2]).range([0, w])
+    const yScale = d3.scaleLinear().domain([0, 1]).range([h, 0])
+
+    // Size scale: circle radius proportional to group size
+    const maxSz = d3.max(points, (d: any) => d.size as number) as number || 1
+    const rScale = d3.scaleSqrt().domain([0, maxSz]).range([3, 14])
+
+    // Zero-line (x = 0 = no disparity)
+    g.append('line')
+      .attr('x1', xScale(0)).attr('x2', xScale(0))
+      .attr('y1', 0).attr('y2', h)
+      .attr('stroke', 'rgba(255,255,255,0.15)')
+      .attr('stroke-dasharray', '5 3')
+
+    // Overall positive rate reference line (first point's overall_rate if available)
+    const overallRate = points[0]?.overall_rate
+    if (overallRate != null) {
+      g.append('line')
+        .attr('x1', 0).attr('x2', w)
+        .attr('y1', yScale(overallRate)).attr('y2', yScale(overallRate))
+        .attr('stroke', 'rgba(255,255,255,0.1)')
+        .attr('stroke-dasharray', '5 3')
+      g.append('text')
+        .attr('x', w + 4).attr('y', yScale(overallRate) + 3)
+        .attr('fill', 'rgba(255,255,255,0.25)').attr('font-size', 7.5)
+        .attr('font-family', 'JetBrains Mono, monospace')
+        .text(`avg ${(overallRate * 100).toFixed(0)}%`)
+    }
+
+    // Axes
+    g.append('g').attr('transform', `translate(0,${h})`)
+      .call(d3.axisBottom(xScale).ticks(5).tickFormat((d: any) => `${(+d * 100).toFixed(0)}%`))
+      .call(ax => ax.select('.domain').remove())
+      .selectAll('text').attr('fill', '#ffffff55').attr('font-size', 8.5).attr('font-family', 'JetBrains Mono, monospace')
+
+    g.append('g')
+      .call(d3.axisLeft(yScale).ticks(5).tickFormat((d: any) => `${(+d * 100).toFixed(0)}%`))
+      .call(ax => ax.select('.domain').remove())
+      .selectAll('text').attr('fill', '#ffffff55').attr('font-size', 8.5).attr('font-family', 'JetBrains Mono, monospace')
+
+    // Axis labels
+    svg.append('text')
+      .attr('x', margin.left + w / 2).attr('y', H - 8)
+      .attr('text-anchor', 'middle').attr('fill', 'rgba(255,255,255,0.3)')
+      .attr('font-size', 9).attr('font-family', 'JetBrains Mono, monospace')
+      .text('Statistical Parity Difference  ←  disadvantaged  |  advantaged  →')
+
+    svg.append('text')
+      .attr('transform', 'rotate(-90)')
+      .attr('x', -(margin.top + h / 2)).attr('y', 14)
+      .attr('text-anchor', 'middle').attr('fill', 'rgba(255,255,255,0.3)')
+      .attr('font-size', 9).attr('font-family', 'JetBrains Mono, monospace')
+      .text('Positive Rate')
+
+    // Tooltip div
+    const tooltip = d3.select('body').append('div')
+      .style('position', 'fixed').style('pointer-events', 'none')
+      .style('background', '#1e293b').style('border', '1px solid rgba(255,255,255,0.1)')
+      .style('border-radius', '8px').style('padding', '6px 10px')
+      .style('font-size', '11px').style('font-family', 'JetBrains Mono, monospace')
+      .style('color', '#e2e8f0').style('z-index', '9999').style('opacity', '0')
+      .style('max-width', '220px').style('line-height', '1.5')
 
     // Points
     g.selectAll('circle.pt')
-      .data(points.slice(0, 1500))
+      .data(points)
       .join('circle')
       .attr('class', 'pt')
       .attr('cx', (d: any) => xScale(d.x))
       .attr('cy', (d: any) => yScale(d.y))
-      .attr('r', 2.5)
-      .attr('fill', (d: any) => colorScale(d.bias_score))
-      .attr('opacity', 0.7)
+      .attr('r', (d: any) => rScale(d.size || 1))
+      .attr('fill', (d: any) => d.flagged ? '#ef4444' : '#22c55e')
+      .attr('fill-opacity', (d: any) => d.flagged ? 0.75 : 0.55)
+      .attr('stroke', (d: any) => d.flagged ? '#ef4444' : '#22c55e')
+      .attr('stroke-opacity', 0.9)
+      .attr('stroke-width', 1)
+      .on('mouseover', function(event: MouseEvent, d: any) {
+        d3.select(this).attr('fill-opacity', 1).attr('r', rScale(d.size || 1) + 2)
+        tooltip.style('opacity', '1')
+          .html(`<b>${d.slice_label}</b><br/>SPD: ${(d.x * 100).toFixed(1)}%<br/>Pos. rate: ${(d.y * 100).toFixed(1)}%<br/>n = ${d.size}`)
+      })
+      .on('mousemove', function(event: MouseEvent) {
+        tooltip.style('left', `${event.clientX + 12}px`).style('top', `${event.clientY - 28}px`)
+      })
+      .on('mouseout', function(_event: any, d: any) {
+        d3.select(this).attr('fill-opacity', d.flagged ? 0.75 : 0.55).attr('r', rScale(d.size || 1))
+        tooltip.style('opacity', '0')
+      })
 
-    // Hotspot circles
-    hotspots.forEach((h: any) => {
-      g.append('circle')
-        .attr('cx', xScale(h.centroid_x))
-        .attr('cy', yScale(h.centroid_y))
-        .attr('r', 18)
-        .attr('fill', 'none')
-        .attr('stroke', '#ef4444')
-        .attr('stroke-width', 1.5)
-        .attr('stroke-dasharray', '4 2')
-        .attr('opacity', 0.8)
-
+    // Labels for flagged points
+    points.filter((d: any) => d.flagged).forEach((d: any) => {
+      const shortLabel = d.slice_label.length > 18 ? d.slice_label.slice(0, 18) + '…' : d.slice_label
       g.append('text')
-        .attr('x', xScale(h.centroid_x))
-        .attr('y', yScale(h.centroid_y) - 22)
+        .attr('x', xScale(d.x))
+        .attr('y', yScale(d.y) - rScale(d.size || 1) - 3)
         .attr('text-anchor', 'middle')
-        .attr('fill', '#ef4444')
-        .attr('font-size', 9)
+        .attr('fill', '#ef4444cc')
+        .attr('font-size', 8)
         .attr('font-family', 'JetBrains Mono, monospace')
-        .text(h.dominant_slice)
+        .text(shortLabel)
     })
 
-    // Legend
-    const defs = svg.append('defs')
-    const grad = defs.append('linearGradient').attr('id', 'bias-grad').attr('x1', '0%').attr('x2', '100%')
-    grad.append('stop').attr('offset', '0%').attr('stop-color', '#ef4444')
-    grad.append('stop').attr('offset', '50%').attr('stop-color', '#eab308')
-    grad.append('stop').attr('offset', '100%').attr('stop-color', '#22c55e')
-
-    svg.append('rect')
-      .attr('x', W - 110).attr('y', H - 16).attr('width', 90).attr('height', 6)
-      .attr('fill', 'url(#bias-grad)').attr('rx', 3)
-    svg.append('text').attr('x', W - 115).attr('y', H - 20).attr('fill', '#ffffff44')
-      .attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace').text('high bias')
-    svg.append('text').attr('x', W - 30).attr('y', H - 20).attr('fill', '#ffffff44')
-      .attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace').text('low')
-
+    return () => { tooltip.remove() }
   }, [points, hotspots])
 
   return (
-    <svg ref={ref} width="100%" height={320}
+    <svg ref={ref} width="100%" height={360}
       className="rounded-xl overflow-visible" style={{ background: 'rgba(255,255,255,0.02)' }} />
   )
 }
@@ -454,6 +508,32 @@ export default function ResultsPage() {
 
   const highRiskProxies = (proxy?.summary?.critical_proxies ?? 0) + (proxy?.summary?.high_proxies ?? 0)
 
+  // Merge compliance tags from all three phases — show worst-case status per regulation
+  const mergedComplianceTags = (() => {
+    const allTags = [
+      ...(modelProbe?.cartography?.compliance_tags ?? []),
+      ...(datasetProbe?.cartography?.compliance_tags ?? []),
+      ...(carto?.compliance_tags ?? []),
+    ]
+    if (!allTags.length) return []
+    // Group by regulation ID and pick worst status (FAIL > CAUTION > PASS)
+    const statusRank: Record<string, number> = { FAIL: 2, CAUTION: 1, PASS: 0 }
+    const byId: Record<string, any> = {}
+    for (const tag of allTags) {
+      const existing = byId[tag.id]
+      if (!existing || statusRank[tag.status] > statusRank[existing.status]) {
+        // Merge violations from all phases
+        byId[tag.id] = {
+          ...tag,
+          violations: [...(existing?.violations ?? []), ...(tag.violations ?? [])].filter((v, i, arr) => arr.indexOf(v) === i),
+          worst_spd: Math.max(existing?.worst_spd ?? 0, tag.worst_spd ?? 0),
+          worst_di: Math.min(existing?.worst_di ?? 1, tag.worst_di ?? 1),
+        }
+      }
+    }
+    return Object.values(byId)
+  })()
+
   // Adjust FairScore to account for proxy chain risk (cartography score only sees model outputs)
   const adjustedFairScore = (() => {
     if (!carto?.fair_score) return null
@@ -545,9 +625,9 @@ export default function ResultsPage() {
         ))}
       </motion.div>}
 
-      {/* Compliance badges */}
-      {carto?.compliance_tags?.length > 0 && (
-        <ComplianceBadges tags={carto.compliance_tags} />
+      {/* Compliance badges — worst-case across all phases */}
+      {mergedComplianceTags.length > 0 && (
+        <ComplianceBadges tags={mergedComplianceTags} />
       )}
 
       {/* Tab navigation */}

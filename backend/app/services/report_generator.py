@@ -100,6 +100,8 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
     constitution = result.get("constitution") or {}
     proxy_hunt = result.get("proxy_hunt") or {}
     redteam = result.get("redteam") or {}
+    model_probe = result.get("model_probe") or {}
+    dataset_probe = result.get("dataset_probe") or {}
     audit_id = result.get("audit_id", "—")
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
@@ -130,16 +132,18 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
         meta,
     ))
 
-    # ── Stage pipeline indicator ────────────────────────────────────────────
-    stages_done = ["Stage 1: Bias Cartography"]
-    if constitution:
-        stages_done.append("Stage 2: Counterfactual Constitution")
-    if proxy_hunt:
-        stages_done.append("Stage 3: Proxy Variable Hunt")
+    # ── Phase pipeline indicator ─────────────────────────────────────────────
+    stages_done = []
+    if model_probe:
+        stages_done.append("Phase 1: Model Probe")
+    if dataset_probe or slice_metrics:
+        stages_done.append("Phase 2: Dataset Analysis")
+    if constitution or proxy_hunt or slice_metrics:
+        stages_done.append("Phase 3: Cross-Analysis")
     if redteam:
-        stages_done.append("Stage 6: Red-Team & Remediation")
+        stages_done.append("Red-Team & Remediation")
     story.append(Paragraph(
-        "Completed stages: " + " → ".join(stages_done),
+        "Completed phases: " + " → ".join(stages_done) if stages_done else "Audit in progress",
         ParagraphStyle("stages", fontSize=8, textColor=GREEN, fontName="Helvetica", spaceAfter=12),
     ))
 
@@ -187,9 +191,45 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
         story.append(comp_tbl)
         story.append(Spacer(1, 10))
 
-    # ── Stage 1: Cartography — Gemini Analysis ──────────────────────────────
+    # ── Phase 1: Model Probe ─────────────────────────────────────────────────
+    if model_probe:
+        story.append(Paragraph("Phase 1: Model Probe (Embedded Reference Dataset)", h2))
+        mp_summary = model_probe.get("summary", {})
+        ref_size = model_probe.get("reference_dataset_size", "—")
+        ref_cols = ", ".join(model_probe.get("reference_protected_cols") or []) or "—"
+        story.append(Paragraph(
+            f'Reference dataset: <b>{ref_size}</b> rows &nbsp;|&nbsp; '
+            f'Protected cols: <b>{ref_cols}</b> &nbsp;|&nbsp; '
+            f'Biases found: <b>{mp_summary.get("bias_count", 0)}</b>',
+            meta,
+        ))
+        if model_probe.get("degenerate"):
+            story.append(Paragraph(
+                "<b>Model Probe Inconclusive — Synthetic Data Out-of-Distribution</b>", body
+            ))
+            story.append(Paragraph(str(model_probe.get("degenerate_message", "")), body))
+        else:
+            mp_biases = model_probe.get("model_biases", [])
+            if mp_biases:
+                story.append(Paragraph("Hidden Biases Detected by Model Probe", h3))
+                bias_rows = [["Attribute", "Type", "Severity", "Magnitude", "Source"]]
+                for b in mp_biases:
+                    sc = _sev_color(b.get("severity", ""))
+                    bias_rows.append([
+                        Paragraph(str(b.get("attribute", "—")), mono),
+                        Paragraph(str(b.get("type", "—")), mono),
+                        Paragraph(f'<font color="{sc.hexval()}">{(b.get("severity") or "—").upper()}</font>', mono),
+                        Paragraph(f'{b.get("magnitude", 0):.3f}', mono),
+                        Paragraph(str(b.get("source", "—")), mono),
+                    ])
+                bias_tbl = Table(bias_rows, colWidths=["20%", "22%", "14%", "14%", "30%"])
+                bias_tbl.setStyle(TableStyle(_HDR_STYLE + _TBL_BASE))
+                story.append(bias_tbl)
+        story.append(Spacer(1, 10))
+
+    # ── Phase 3: Cross-Analysis — Cartography Gemini Analysis ───────────────
     if gemini and gemini.get("headline"):
-        story.append(Paragraph("Stage 1: Bias Cartography — AI Analysis", h2))
+        story.append(Paragraph("Phase 3: Cross-Analysis — AI Bias Synthesis", h2))
         story.append(Paragraph(f'<b>{gemini.get("headline", "")}</b>', body))
         story.append(Paragraph(
             f'Severity: <b>{gemini.get("severity", "—")}</b> &nbsp;|&nbsp; '
@@ -207,9 +247,9 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
             story.append(Paragraph(f'<b>Recommended action:</b> {gemini["recommended_action"]}', body))
         story.append(Spacer(1, 6))
 
-    # ── Stage 1: Top Bias Findings ────────────────────────────────────────────
+    # ── Phase 3: Top Bias Findings ────────────────────────────────────────────
     if slice_metrics:
-        story.append(Paragraph("Stage 1: Top Bias Findings (by magnitude)", h2))
+        story.append(Paragraph("Phase 3: Top Bias Findings by Magnitude (Cross-Analysis)", h2))
         metric_rows = [["Demographic Slice", "SPD", "DI", "Pos. Rate", "Samples", "Flagged"]]
         for m in slice_metrics[:15]:
             flagged = "YES" if m.get("flagged") else "OK"
@@ -229,10 +269,10 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
         story.append(metric_tbl)
         story.append(Spacer(1, 10))
 
-    # ── Stage 2: Counterfactual Constitution ────────────────────────────────
+    # ── Phase 3: Counterfactual Constitution ────────────────────────────────
     if constitution:
         story.append(PageBreak())
-        story.append(Paragraph("Stage 2: Counterfactual Constitution", h2))
+        story.append(Paragraph("Phase 3: Counterfactual Constitution", h2))
 
         const_summary = constitution.get("summary", {})
         if const_summary:
@@ -280,10 +320,10 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
                 else:
                     story.append(Paragraph(line, body))
 
-    # ── Stage 3: Proxy Variable Hunt ────────────────────────────────────────
+    # ── Phase 3: Proxy Variable Hunt ────────────────────────────────────────
     if proxy_hunt:
         story.append(PageBreak())
-        story.append(Paragraph("Stage 3: Proxy Variable Hunt", h2))
+        story.append(Paragraph("Phase 3: Proxy Variable Hunt", h2))
 
         proxy_summary = proxy_hunt.get("summary", {})
         if proxy_summary:
@@ -320,10 +360,10 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
             if proxy_gemini.get("recommended_action"):
                 story.append(Paragraph(f'<b>Recommended action:</b> {proxy_gemini["recommended_action"]}', body))
 
-    # ── Stage 6: Red-Team & Remediation ─────────────────────────────────────
+    # ── Red-Team & Remediation ───────────────────────────────────────────────
     if redteam:
         story.append(PageBreak())
-        story.append(Paragraph("Stage 6: Red-Team Adversarial Audit &amp; Remediation", h2))
+        story.append(Paragraph("Red-Team Adversarial Audit &amp; Remediation", h2))
 
         # The state can come in two shapes:
         # 1. safe_state directly (has "iteration", "validation_results", "patch_results")

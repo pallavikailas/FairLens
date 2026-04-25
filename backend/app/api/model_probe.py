@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 from app.services.model_adapter import FairLensAdapter
 from app.services.model_probe import model_probe_service
+from app.services.compliance_mapper import check_compliance
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -89,6 +90,11 @@ async def run_model_probe(
             audit_id=audit_id,
             user_protected_cols=user_protected or None,
         )
+        # Attach compliance tags to cartography sub-result
+        if "cartography" in result and not result.get("degenerate"):
+            result["cartography"]["compliance_tags"] = check_compliance(
+                result["cartography"].get("slice_metrics", [])
+            )
         return JSONResponse(content=result)
     except ValueError as e:
         raise HTTPException(422, str(e))
