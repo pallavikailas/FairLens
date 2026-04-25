@@ -399,6 +399,7 @@ export default function ResultsPage() {
 
   // Biases from Phase 1 (model probe)
   const modelProbeBiases: any[] = modelProbe?.model_biases ?? []
+  const modelProbeDiagnostics = modelProbe?.summary?.prediction_diagnostics ?? modelProbe?.prediction_diagnostics ?? null
   // Biases from Phase 2 (dataset probe)
   const datasetProbeBiases: any[] = datasetProbe?.dataset_biases ?? []
 
@@ -576,6 +577,15 @@ export default function ResultsPage() {
             <div className="space-y-4">
               {modelProbe ? (
                 <>
+                  {(modelProbeDiagnostics?.collapsed_output || modelProbeDiagnostics?.near_constant_output) && (
+                    <div className="glass rounded-2xl p-5 border border-signal-red/20 bg-signal-red/5">
+                      <div className="text-xs font-mono text-signal-red mb-2">Probe Validity Warning</div>
+                      <p className="text-white/80 text-sm">{modelProbeDiagnostics?.reason}</p>
+                      <p className="text-white/40 text-xs mt-2">
+                        Phase 1 fairness metrics are not trustworthy when the model outputs an almost constant prediction on the reference probe.
+                      </p>
+                    </div>
+                  )}
                   <div className="grid md:grid-cols-3 gap-4">
                     <div className="glass rounded-2xl p-5 border border-lens/15">
                       <div className="text-xs font-mono text-white/40 mb-2">Model FairScore™ (Reference Dataset)</div>

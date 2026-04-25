@@ -326,8 +326,9 @@ class HuggingFaceAdapter(BaseModelAdapter):
                         raise RuntimeError(
                             f"HuggingFace model '{self.model_name}' is loading — wait ~20s and retry."
                         )
-                    logger.warning(f"[HF] per-item inference error: {item_err}")
-                    results.append([{"label": "UNKNOWN", "score": 0.5}])
+                    raise RuntimeError(
+                        f"HuggingFace classification failed for '{self.model_name}': {item_err}"
+                    )
             if not fallback_to_raw_http:
                 return results
 
@@ -361,8 +362,9 @@ class HuggingFaceAdapter(BaseModelAdapter):
             resp.raise_for_status()
             data = resp.json()
             if not isinstance(data, list):
-                results.extend([[{"label": "UNKNOWN", "score": 0.5}]] * len(batch))
-                continue
+                raise ValueError(
+                    f"Unexpected HuggingFace response format for '{self.model_name}': {type(data).__name__}"
+                )
             if len(data) == 1 and isinstance(data[0], list) and len(data[0]) == len(batch):
                 items = data[0]
             elif len(data) == len(batch):
@@ -398,7 +400,7 @@ class HuggingFaceAdapter(BaseModelAdapter):
         probas = []
         for item in raw:
             candidates = item if isinstance(item, list) else [item]
-            pos_score = 0.5
+            pos_score = None
             for c in candidates:
                 label_norm = c.get("label", "").upper().replace("-", "_").replace(" ", "_")
                 score = float(c.get("score", 0.5))
@@ -408,10 +410,11 @@ class HuggingFaceAdapter(BaseModelAdapter):
                 if label_norm in _POS_LABELS:
                     pos_score = score
                     break
-            else:
-                # Unknown labels — use highest-scoring label as positive proxy
-                best = max(candidates, key=lambda c: c.get("score", 0))
-                pos_score = float(best.get("score", 0.5))
+            if pos_score is None:
+                raise ValueError(
+                    f"Could not map HuggingFace labels to a binary decision for '{self.model_name}': "
+                    f"{[c.get('label', '') for c in candidates]}"
+                )
             probas.append([1 - pos_score, pos_score])
         return np.array(probas)
 
@@ -535,7 +538,7 @@ class GenerativeLLMAdapter(BaseModelAdapter):
             raise
         except Exception as exc:
             logger.warning(f"[GenerativeLLMAdapter] query failed: {exc}")
-        return 0.5
+            raise RuntimeError(f"Model query failed for '{self.model_name}': {exc}") from exc
 
     def _query_openai(self, prompt: str) -> float:
         import openai
