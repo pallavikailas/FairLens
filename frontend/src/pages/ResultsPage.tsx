@@ -696,7 +696,7 @@ export default function ResultsPage() {
             </div>
           )}
 
-          {/* ── Phase 3: Cross-Analysis Synthesis ─────────────────────────── */}
+          {/* Phase 3: Cross-Analysis Synthesis */}
           {activeTab === 'cross_synthesis' && (
             <div className="space-y-4">
               {crossSynth ? (
@@ -713,7 +713,7 @@ export default function ResultsPage() {
                       )}
                       <ul className="space-y-1">
                         {crossSynth.gemini_analysis.key_findings?.map((f: string, i: number) => (
-                          <li key={i} className="text-white/50 text-xs font-mono flex gap-2"><span className="text-lens-light">›</span>{f}</li>
+                          <li key={i} className="text-white/50 text-xs font-mono flex gap-2"><span className="text-lens-light">{'>'}</span>{f}</li>
                         ))}
                       </ul>
                     </div>
