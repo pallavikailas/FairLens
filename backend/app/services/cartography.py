@@ -226,49 +226,71 @@ Return ONLY this JSON:
 
     def _generate_map_points(self, df, protected_cols, target_col, slice_metrics, model_predictions=None):
         """
-        Returns one point per demographic slice (not per row).
-        x = statistical_parity_diff  (negative = disadvantaged group)
+        Returns one point per demographic slice.
+        x = statistical_parity_diff (signed: negative = disadvantaged group)
         y = positive_rate
-        Each point represents how a demographic group compares to the population average.
+        Single-attribute slices are full-size; intersectional slices are smaller.
         """
         if not slice_metrics:
             return []
 
-        # Use single-attribute slices only — intersectional slices are shown as hotspots
-        single = [m for m in slice_metrics if "∩" not in m["label"]]
-
-        # Deduplicate: keep highest-magnitude entry per unique label
         seen: dict = {}
-        for m in single:
+        for m in slice_metrics:
             lbl = m["label"]
             if lbl not in seen or m["bias_magnitude"] > seen[lbl]["bias_magnitude"]:
                 seen[lbl] = m
 
         points = []
         for m in seen.values():
+            is_intersectional = "∩" in m["label"]
             points.append({
-                "x":           round(float(m["statistical_parity_diff"]), 4),
-                "y":           round(float(m["positive_rate"]), 4),
-                "bias_score":  round(float(m["bias_magnitude"]), 4),
-                "slice_label": m["label"],
-                "attribute":   m.get("attribute", ""),
-                "size":        m["size"],
-                "flagged":     bool(m.get("flagged", False)),
-                "overall_rate": round(float(m.get("overall_rate", 0)), 4),
+                "x":              round(float(m["statistical_parity_diff"]), 4),
+                "y":              round(float(m["positive_rate"]), 4),
+                "bias_score":     round(float(m["bias_magnitude"]), 4),
+                "slice_label":    m["label"],
+                "attribute":      m.get("attribute", ""),
+                "size":           m["size"],
+                "flagged":        bool(m.get("flagged", False)),
+                "overall_rate":   round(float(m.get("overall_rate", 0)), 4),
+                "intersectional": is_intersectional,
+                "disparate_impact": m.get("disparate_impact"),
+                "eod":            m.get("equal_opportunity_diff"),
+                "eq_odds":        m.get("equalized_odds_diff"),
             })
         return points
 
     def _identify_hotspots(self, slice_metrics):
-        return [
-            {
-                "cluster_id": i, "centroid_x": m["bias_magnitude"], "centroid_y": m["positive_rate"],
-                "size": m["size"], "mean_bias_magnitude": m["bias_magnitude"],
-                "dominant_slice": m["label"],
-                "severity": "critical" if m["bias_magnitude"] > 0.3 else "high" if m["bias_magnitude"] > 0.15 else "medium",
-                "statistical_parity_diff": m["statistical_parity_diff"], "disparate_impact": m["disparate_impact"],
-            }
-            for i, m in enumerate([m for m in slice_metrics if m.get("flagged")][:8])
-        ]
+        """
+        Returns flagged slices as hotspot records.
+        centroid_x = signed SPD (matches the map x-axis).
+        centroid_y = positive_rate (matches the map y-axis).
+        """
+        flagged = [m for m in slice_metrics if m.get("flagged")]
+        hotspots = []
+        for i, m in enumerate(flagged[:12]):
+            severity = (
+                "critical" if m["bias_magnitude"] > 0.3
+                else "high"  if m["bias_magnitude"] > 0.15
+                else "medium"
+            )
+            hotspots.append({
+                "cluster_id":          i,
+                # signed SPD so the ring sits on the correct x position in the scatter
+                "centroid_x":          m["statistical_parity_diff"],
+                "centroid_y":          m["positive_rate"],
+                "size":                m["size"],
+                "mean_bias_magnitude": m["bias_magnitude"],
+                "dominant_slice":      m["label"],
+                "attribute":           m.get("attribute", ""),
+                "severity":            severity,
+                "statistical_parity_diff": m["statistical_parity_diff"],
+                "disparate_impact":    m.get("disparate_impact"),
+                "equal_opportunity_diff": m.get("equal_opportunity_diff"),
+                "equalized_odds_diff": m.get("equalized_odds_diff"),
+                "overall_rate":        m.get("overall_rate", 0),
+                "intersectional":      "∩" in m["label"],
+            })
+        return hotspots
 
     def compute_fair_score(self, slice_metrics: list) -> dict:
         """Composite fairness score 0–100. Higher = fairer."""
