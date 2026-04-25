@@ -154,8 +154,8 @@ class FairnessRedTeamAgent:
                 log.append(f"[Attack Agent] Skipping '{attr}' — high-cardinality text column")
                 continue
 
-            top_values   = X_train[attr].value_counts().head(8).index.tolist()
-            base_samples = X_train.sample(min(20, len(X_train)), random_state=iteration)
+            top_values   = X_train[attr].value_counts().head(4).index.tolist()
+            base_samples = X_train.sample(min(8, len(X_train)), random_state=iteration)
 
             for _, row in base_samples.iterrows():
                 for val in top_values:
@@ -498,6 +498,15 @@ class FairnessRedTeamAgent:
         group_corrections = state.get("group_corrections", {})
 
         log.append("[Validator Agent] Re-evaluating bias metrics post-patch...")
+
+        patch_results = state.get("patch_results", {})
+        if not patch_results.get("applied"):
+            log.append("[Validator Agent] No enforceable patches were applied; skipping validation.")
+            return {
+                **state,
+                "validation_results": {"improved": [], "regressed": [], "unchanged": []},
+                "log": log,
+            }
 
         validation: Dict[str, List] = {"improved": [], "regressed": [], "unchanged": []}
 

@@ -120,6 +120,12 @@ async def run_redteam(
     X = df[resolve_feature_cols(raw_model, df, tgt)]
     y = df[tgt].values if tgt in df.columns else np.zeros(len(df), dtype=int)
 
+    if len(X) > 300:
+        sampled = X.sample(300, random_state=42)
+        sample_idx = sampled.index.to_numpy()
+        X = sampled.reset_index(drop=True)
+        y = y[sample_idx]
+
     try:
         biases = json.loads(confirmed_biases)
     except Exception as e:
@@ -139,6 +145,17 @@ async def run_redteam(
         if b.get("attribute") and b["attribute"] not in confirmed_attrs:
             biases.append(b)
             confirmed_attrs.add(b["attribute"])
+
+    actionable_biases = [
+        b for b in biases
+        if b.get("attribute") not in ("", "model_output_distribution")
+    ]
+    if not actionable_biases:
+        raise HTTPException(
+            400,
+            "Red-team requires actionable attribute-level biases. Current finding is only a degenerate model-output warning.",
+        )
+    biases = actionable_biases
 
     # audit_results is optional context — the agent nodes don't need the full output
     try:

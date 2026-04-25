@@ -93,11 +93,15 @@ export default function RedTeamPage() {
   }, [allLogs])
 
   const hasModel = !!store.modelFile || (store.modelType !== 'sklearn' && !!store.modelEndpoint)
+  const actionableBiases = store.confirmedBiases.filter(
+    (b: any) => b.attribute && b.attribute !== 'model_output_distribution'
+  )
+  const hasActionableBiases = actionableBiases.length > 0
 
   const startRedTeam = () => {
     if (!hasModel) return
     if (!store.datasetFile && store.datasetSource === 'upload') return
-    if (store.confirmedBiases.length === 0) return
+    if (!hasActionableBiases) return
     setRunning(true); setStarted(true)
     setAllLogs([]); setDoneNodes(new Set()); setFinalResults(null)
 
@@ -117,7 +121,7 @@ export default function RedTeamPage() {
       store.datasetFile,
       store.protectedCols,
       store.targetCol,
-      store.confirmedBiases,
+      actionableBiases,
       auditResults,
       (event: AgentEvent) => {
         if (event.log?.length) setAllLogs(prev => [...prev, ...event.log!])
@@ -184,10 +188,10 @@ export default function RedTeamPage() {
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}
         className="glass rounded-2xl p-5 border border-white/5 mb-6">
         <div className="text-xs font-mono text-white/30 mb-3 uppercase tracking-wider">
-          Targeting {store.confirmedBiases.length} confirmed biases
+          Targeting {actionableBiases.length} actionable confirmed biases
         </div>
         <div className="flex flex-wrap gap-2">
-          {store.confirmedBiases.map((b: any, i: number) => (
+          {actionableBiases.map((b: any, i: number) => (
             <div key={i} className="flex items-center gap-2 bg-signal-red/10 border border-signal-red/20 rounded-lg px-3 py-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-signal-red" />
               <span className="text-signal-red text-xs font-mono">{b.attribute}</span>
@@ -215,9 +219,17 @@ export default function RedTeamPage() {
           {!started && hasModel && (
             <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
               onClick={startRedTeam}
+              disabled={!hasActionableBiases}
               className="w-full mt-6 py-3 rounded-xl bg-signal-red hover:bg-signal-red/90 text-white font-display font-semibold text-sm transition-all">
               ⊘ Launch Red-Team Agent
             </motion.button>
+          )}
+
+          {!started && hasModel && !hasActionableBiases && (
+            <div className="mt-4 p-3 rounded-xl bg-white/5 border border-white/10 text-white/60 text-xs font-mono">
+              Red-team is unavailable because the current finding is only a degenerate model-output warning.
+              Use dataset or cross-analysis attribute-level biases for remediation.
+            </div>
           )}
 
           {running && (
@@ -231,7 +243,7 @@ export default function RedTeamPage() {
             <div className="mt-4 p-3 rounded-xl bg-signal-green/5 border border-signal-green/20">
               <div className="text-signal-green font-mono text-xs font-semibold mb-1">✓ Agent complete</div>
               <div className="text-white/40 text-xs">
-                {patchesApplied} patches · {store.confirmedBiases.length} biases targeted
+                {patchesApplied} patches · {actionableBiases.length} biases targeted
               </div>
             </div>
           )}
