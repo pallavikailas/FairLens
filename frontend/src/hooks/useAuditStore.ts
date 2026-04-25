@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 
 export interface AuditSession {
-  auditId: string | null
   modelFile: File | null
   datasetFile: File | null
   datasetSource: string
@@ -62,7 +61,6 @@ interface AuditStore extends AuditSession {
 }
 
 const initial: AuditSession = {
-  auditId: null,
   modelFile: null,
   datasetFile: null,
   datasetSource: 'upload',

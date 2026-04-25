@@ -10,17 +10,14 @@ class Settings(BaseSettings):
 
     # GCP
     GOOGLE_CLOUD_PROJECT: str = "fairlens-493318"
-    GOOGLE_CLOUD_REGION: str = "us-central1"
 
     # Vertex AI — used for Gemini 2.5 Flash and text embeddings
     VERTEX_AI_LOCATION: str = "us-central1"
-    VERTEX_EMBEDDING_MODEL: str = "text-embedding-004"
     GEMINI_MODEL: str = "gemini-2.5-flash"
-    GEMINI_API_KEY: str = ""  # optional — Vertex AI ADC is used by default
 
     # Direct Gemini API key (for local dev — no GCP needed)
     # Get a free key at https://aistudio.google.com/apikey
-    GEMINI_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""  # optional — Vertex AI ADC is used by default
 
     # Red-team agent
     REDTEAM_MAX_ITERATIONS: int = 3
