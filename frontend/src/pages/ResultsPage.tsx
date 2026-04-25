@@ -6,9 +6,25 @@ import ReactMarkdown from 'react-markdown'
 import { useAuditStore } from '../hooks/useAuditStore'
 import { exportPdfReport } from '../utils/api'
 
+// ── Attribute colour palette ──────────────────────────────────────────────
+const ATTR_COLORS: Record<string, string> = {
+  gender:      '#818cf8',  // indigo
+  sex:         '#818cf8',
+  race:        '#fb923c',  // orange
+  ethnicity:   '#fb923c',
+  age:         '#a78bfa',  // purple
+  age_group:   '#a78bfa',
+  disability:  '#34d399',  // green
+  religion:    '#f472b6',  // pink
+  nationality: '#38bdf8',  // sky
+}
+const FALLBACK_COLORS = ['#6366f1','#f97316','#10b981','#eab308','#3b82f6','#ec4899','#14b8a6','#f59e0b']
+function attrColor(attr: string, idx: number): string {
+  const key = (attr || '').toLowerCase().split('+')[0].trim()
+  return ATTR_COLORS[key] ?? FALLBACK_COLORS[idx % FALLBACK_COLORS.length]
+}
+
 // ── Bias Map (D3 scatter — per demographic slice) ─────────────────────────
-// Each dot = one demographic group. x = SPD, y = positive rate.
-// Red = biased/flagged, green = fair. Size ∝ group size.
 function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
   const ref = useRef<SVGSVGElement>(null)
 
@@ -17,124 +33,203 @@ function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
     const svg = d3.select(ref.current)
     svg.selectAll('*').remove()
 
-    const W = ref.current.clientWidth || 520
-    const H = 360
-    const margin = { top: 24, right: 24, bottom: 52, left: 60 }
+    const W = ref.current.clientWidth || 560
+    const H = 400
+    const margin = { top: 32, right: 140, bottom: 56, left: 62 }
     const w = W - margin.left - margin.right
     const h = H - margin.top - margin.bottom
 
     const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`)
 
-    // Domains — SPD on x, positive rate on y
+    // ── Scales ────────────────────────────────────────────────────────────
     const xVals = points.map((d: any) => d.x)
     const xMax  = Math.max(Math.abs(d3.min(xVals) as number), Math.abs(d3.max(xVals) as number), 0.05)
-    const xScale = d3.scaleLinear().domain([-xMax * 1.2, xMax * 1.2]).range([0, w])
-    const yScale = d3.scaleLinear().domain([0, 1]).range([h, 0])
+    const xScale = d3.scaleLinear().domain([-xMax * 1.25, xMax * 1.25]).range([0, w])
 
-    // Size scale: circle radius proportional to group size
-    const maxSz = d3.max(points, (d: any) => d.size as number) as number || 1
-    const rScale = d3.scaleSqrt().domain([0, maxSz]).range([3, 14])
+    // Y: clip to actual data range with 15% padding — don't waste space on [0,1]
+    const yVals   = points.map((d: any) => d.y)
+    const yMin    = (d3.min(yVals) as number) - 0.08
+    const yMax    = (d3.max(yVals) as number) + 0.08
+    const yScale  = d3.scaleLinear().domain([Math.max(0, yMin), Math.min(1, yMax)]).range([h, 0])
 
-    // Zero-line (x = 0 = no disparity)
-    g.append('line')
-      .attr('x1', xScale(0)).attr('x2', xScale(0))
-      .attr('y1', 0).attr('y2', h)
-      .attr('stroke', 'rgba(255,255,255,0.15)')
-      .attr('stroke-dasharray', '5 3')
+    const maxSz   = d3.max(points, (d: any) => d.size as number) as number || 1
+    const rScale  = d3.scaleSqrt().domain([0, maxSz]).range([4, 16])
 
-    // Overall positive rate reference line (first point's overall_rate if available)
+    // ── Per-attribute color index ─────────────────────────────────────────
+    const allAttrs   = [...new Set(points.map((d: any) => (d.attribute || '').split('+')[0].trim()))]
+    const attrIdx    = Object.fromEntries(allAttrs.map((a: string, i: number) => [a, i]))
+    const colorOf    = (d: any) => attrColor((d.attribute || '').split('+')[0].trim(), attrIdx[(d.attribute || '').split('+')[0].trim()] ?? 0)
+
+    // ── Background quadrant shading ───────────────────────────────────────
+    g.append('rect').attr('x', 0).attr('y', 0).attr('width', xScale(0)).attr('height', h)
+      .attr('fill', 'rgba(239,68,68,0.04)')
+    g.append('rect').attr('x', xScale(0)).attr('y', 0).attr('width', w - xScale(0)).attr('height', h)
+      .attr('fill', 'rgba(34,197,94,0.04)')
+
+    // ── Reference lines ───────────────────────────────────────────────────
+    // Vertical: x=0 = no disparity
+    g.append('line').attr('x1', xScale(0)).attr('x2', xScale(0)).attr('y1', 0).attr('y2', h)
+      .attr('stroke', 'rgba(255,255,255,0.2)').attr('stroke-dasharray', '5 3')
+    g.append('text').attr('x', xScale(0)).attr('y', -8).attr('text-anchor', 'middle')
+      .attr('fill', 'rgba(255,255,255,0.25)').attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace')
+      .text('no bias')
+
+    // Horizontal: overall positive rate
     const overallRate = points[0]?.overall_rate
-    if (overallRate != null) {
-      g.append('line')
-        .attr('x1', 0).attr('x2', w)
-        .attr('y1', yScale(overallRate)).attr('y2', yScale(overallRate))
-        .attr('stroke', 'rgba(255,255,255,0.1)')
-        .attr('stroke-dasharray', '5 3')
-      g.append('text')
-        .attr('x', w + 4).attr('y', yScale(overallRate) + 3)
-        .attr('fill', 'rgba(255,255,255,0.25)').attr('font-size', 7.5)
-        .attr('font-family', 'JetBrains Mono, monospace')
+    if (overallRate != null && overallRate >= (yMin + 0.08) && overallRate <= (yMax - 0.08)) {
+      g.append('line').attr('x1', 0).attr('x2', w).attr('y1', yScale(overallRate)).attr('y2', yScale(overallRate))
+        .attr('stroke', 'rgba(255,255,255,0.12)').attr('stroke-dasharray', '5 3')
+      g.append('text').attr('x', -6).attr('y', yScale(overallRate) + 4).attr('text-anchor', 'end')
+        .attr('fill', 'rgba(255,255,255,0.25)').attr('font-size', 7.5).attr('font-family', 'JetBrains Mono, monospace')
         .text(`avg ${(overallRate * 100).toFixed(0)}%`)
     }
 
-    // Axes
+    // ── Axes ─────────────────────────────────────────────────────────────
     g.append('g').attr('transform', `translate(0,${h})`)
-      .call(d3.axisBottom(xScale).ticks(5).tickFormat((d: any) => `${(+d * 100).toFixed(0)}%`))
-      .call(ax => ax.select('.domain').remove())
-      .selectAll('text').attr('fill', '#ffffff55').attr('font-size', 8.5).attr('font-family', 'JetBrains Mono, monospace')
+      .call(d3.axisBottom(xScale).ticks(6).tickFormat((d: any) => `${+d >= 0 ? '+' : ''}${(+d * 100).toFixed(0)}%`))
+      .call(ax => { ax.select('.domain').remove(); ax.selectAll('.tick line').attr('stroke', 'rgba(255,255,255,0.1)') })
+      .selectAll('text').attr('fill', '#ffffff66').attr('font-size', 8.5).attr('font-family', 'JetBrains Mono, monospace')
 
     g.append('g')
       .call(d3.axisLeft(yScale).ticks(5).tickFormat((d: any) => `${(+d * 100).toFixed(0)}%`))
-      .call(ax => ax.select('.domain').remove())
-      .selectAll('text').attr('fill', '#ffffff55').attr('font-size', 8.5).attr('font-family', 'JetBrains Mono, monospace')
+      .call(ax => { ax.select('.domain').remove(); ax.selectAll('.tick line').attr('stroke', 'rgba(255,255,255,0.1)') })
+      .selectAll('text').attr('fill', '#ffffff66').attr('font-size', 8.5).attr('font-family', 'JetBrains Mono, monospace')
 
-    // Axis labels
-    svg.append('text')
-      .attr('x', margin.left + w / 2).attr('y', H - 8)
+    // ── Axis labels ───────────────────────────────────────────────────────
+    svg.append('text').attr('x', margin.left + w / 2).attr('y', H - 10)
       .attr('text-anchor', 'middle').attr('fill', 'rgba(255,255,255,0.3)')
       .attr('font-size', 9).attr('font-family', 'JetBrains Mono, monospace')
-      .text('Statistical Parity Difference  ←  disadvantaged  |  advantaged  →')
+      .text('← disadvantaged  |  Statistical Parity Difference  |  advantaged →')
 
-    svg.append('text')
-      .attr('transform', 'rotate(-90)')
-      .attr('x', -(margin.top + h / 2)).attr('y', 14)
+    svg.append('text').attr('transform', 'rotate(-90)')
+      .attr('x', -(margin.top + h / 2)).attr('y', 16)
       .attr('text-anchor', 'middle').attr('fill', 'rgba(255,255,255,0.3)')
       .attr('font-size', 9).attr('font-family', 'JetBrains Mono, monospace')
       .text('Positive Rate')
 
-    // Tooltip div
+    // ── Tooltip ───────────────────────────────────────────────────────────
     const tooltip = d3.select('body').append('div')
       .style('position', 'fixed').style('pointer-events', 'none')
-      .style('background', '#1e293b').style('border', '1px solid rgba(255,255,255,0.1)')
-      .style('border-radius', '8px').style('padding', '6px 10px')
+      .style('background', '#0f172a').style('border', '1px solid rgba(255,255,255,0.12)')
+      .style('border-radius', '10px').style('padding', '8px 12px')
       .style('font-size', '11px').style('font-family', 'JetBrains Mono, monospace')
       .style('color', '#e2e8f0').style('z-index', '9999').style('opacity', '0')
-      .style('max-width', '220px').style('line-height', '1.5')
+      .style('max-width', '240px').style('line-height', '1.7').style('transition', 'opacity 0.1s')
 
-    // Points
+    // ── Hotspot rings (drawn before points so points render on top) ────────
+    hotspots.filter((hs: any) => {
+      const cx = xScale(hs.centroid_x)
+      const cy = yScale(hs.centroid_y)
+      return cx >= 0 && cx <= w && cy >= 0 && cy <= h
+    }).forEach((hs: any) => {
+      const cx = xScale(hs.centroid_x)
+      const cy = yScale(hs.centroid_y)
+      const sev = hs.severity
+      const ringColor = sev === 'critical' ? '#ef4444' : sev === 'high' ? '#f97316' : '#eab308'
+      // Outer pulse ring
+      g.append('circle').attr('cx', cx).attr('cy', cy).attr('r', rScale(hs.size || 1) + 10)
+        .attr('fill', 'none').attr('stroke', ringColor).attr('stroke-width', 1.5)
+        .attr('stroke-dasharray', '4 3').attr('opacity', 0.6)
+      // Severity label above
+      g.append('text').attr('x', cx).attr('y', cy - rScale(hs.size || 1) - 14)
+        .attr('text-anchor', 'middle').attr('fill', ringColor).attr('font-size', 7.5)
+        .attr('font-family', 'JetBrains Mono, monospace').attr('font-weight', 'bold')
+        .text(`▲ ${sev}`)
+    })
+
+    // ── Intersectional slices (diamond markers, drawn first) ──────────────
+    const interPoints = points.filter((d: any) => d.intersectional)
+    interPoints.forEach((d: any) => {
+      const cx = xScale(d.x)
+      const cy = yScale(d.y)
+      if (cx < 0 || cx > w || cy < 0 || cy > h) return
+      const r = Math.max(3, rScale(d.size || 1) * 0.65)
+      const path = `M ${cx} ${cy - r} L ${cx + r} ${cy} L ${cx} ${cy + r} L ${cx - r} ${cy} Z`
+      g.append('path').attr('d', path)
+        .attr('fill', colorOf(d)).attr('fill-opacity', d.flagged ? 0.6 : 0.25)
+        .attr('stroke', colorOf(d)).attr('stroke-width', d.flagged ? 1.5 : 0.5).attr('stroke-opacity', 0.8)
+    })
+
+    // ── Single-attribute points (circles) ────────────────────────────────
+    const singlePoints = points.filter((d: any) => !d.intersectional)
     g.selectAll('circle.pt')
-      .data(points)
-      .join('circle')
-      .attr('class', 'pt')
+      .data(singlePoints)
+      .join('circle').attr('class', 'pt')
       .attr('cx', (d: any) => xScale(d.x))
       .attr('cy', (d: any) => yScale(d.y))
-      .attr('r', (d: any) => rScale(d.size || 1))
-      .attr('fill', (d: any) => d.flagged ? '#ef4444' : '#22c55e')
-      .attr('fill-opacity', (d: any) => d.flagged ? 0.75 : 0.55)
-      .attr('stroke', (d: any) => d.flagged ? '#ef4444' : '#22c55e')
+      .attr('r',  (d: any) => rScale(d.size || 1))
+      .attr('fill',         (d: any) => colorOf(d))
+      .attr('fill-opacity', (d: any) => d.flagged ? 0.8 : 0.35)
+      .attr('stroke',       (d: any) => colorOf(d))
+      .attr('stroke-width', (d: any) => d.flagged ? 2 : 0.8)
       .attr('stroke-opacity', 0.9)
-      .attr('stroke-width', 1)
       .on('mouseover', function(event: MouseEvent, d: any) {
-        d3.select(this).attr('fill-opacity', 1).attr('r', rScale(d.size || 1) + 2)
-        tooltip.style('opacity', '1')
-          .html(`<b>${d.slice_label}</b><br/>SPD: ${(d.x * 100).toFixed(1)}%<br/>Pos. rate: ${(d.y * 100).toFixed(1)}%<br/>n = ${d.size}`)
+        d3.select(this).attr('fill-opacity', 1).attr('r', rScale(d.size || 1) + 3)
+        const diStr  = d.disparate_impact != null ? `DI: ${d.disparate_impact.toFixed(3)}<br/>` : ''
+        const eodStr = d.eod            != null ? `EOD: ${(d.eod * 100).toFixed(1)}%<br/>` : ''
+        const flagStr = d.flagged ? `<span style="color:#ef4444">⚠ FLAGGED</span><br/>` : ''
+        tooltip.style('opacity', '1').html(
+          `<b>${d.slice_label}</b><br/>${flagStr}` +
+          `SPD: <b>${d.x >= 0 ? '+' : ''}${(d.x * 100).toFixed(1)}%</b><br/>` +
+          `Pos. rate: ${(d.y * 100).toFixed(1)}%<br/>${diStr}${eodStr}n = ${d.size}`
+        )
       })
       .on('mousemove', function(event: MouseEvent) {
-        tooltip.style('left', `${event.clientX + 12}px`).style('top', `${event.clientY - 28}px`)
+        tooltip.style('left', `${event.clientX + 14}px`).style('top', `${event.clientY - 32}px`)
       })
       .on('mouseout', function(_event: any, d: any) {
-        d3.select(this).attr('fill-opacity', d.flagged ? 0.75 : 0.55).attr('r', rScale(d.size || 1))
+        d3.select(this).attr('fill-opacity', d.flagged ? 0.8 : 0.35).attr('r', rScale(d.size || 1))
         tooltip.style('opacity', '0')
       })
 
-    // Labels for flagged points
-    points.filter((d: any) => d.flagged).forEach((d: any) => {
-      const shortLabel = d.slice_label.length > 18 ? d.slice_label.slice(0, 18) + '…' : d.slice_label
-      g.append('text')
-        .attr('x', xScale(d.x))
-        .attr('y', yScale(d.y) - rScale(d.size || 1) - 3)
-        .attr('text-anchor', 'middle')
-        .attr('fill', '#ef4444cc')
-        .attr('font-size', 8)
-        .attr('font-family', 'JetBrains Mono, monospace')
-        .text(shortLabel)
+    // ── Labels for flagged single-attribute points ────────────────────────
+    singlePoints.filter((d: any) => d.flagged).forEach((d: any) => {
+      const cx = xScale(d.x)
+      const cy = yScale(d.y)
+      if (cx < 0 || cx > w || cy < 0 || cy > h) return
+      const shortLabel = d.slice_label.replace(/^.*?=/, '').slice(0, 14)
+      g.append('text').attr('x', cx).attr('y', cy - rScale(d.size || 1) - 5)
+        .attr('text-anchor', 'middle').attr('fill', colorOf(d))
+        .attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace')
+        .attr('font-weight', 'bold').text(shortLabel)
     })
+
+    // ── Legend (right side — one row per unique attribute) ─────────────────
+    const legendAttrs = allAttrs.filter((a: string) => singlePoints.some((d: any) => (d.attribute || '').split('+')[0].trim() === a))
+    const legX = w + 16
+    let legY = 0
+    svg.append('text').attr('x', margin.left + legX).attr('y', margin.top + legY - 6)
+      .attr('fill', 'rgba(255,255,255,0.25)').attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace')
+      .text('attribute')
+    legendAttrs.forEach((a: string) => {
+      const color = attrColor(a, attrIdx[a] ?? 0)
+      svg.append('circle').attr('cx', margin.left + legX + 5).attr('cy', margin.top + legY + 8)
+        .attr('r', 5).attr('fill', color).attr('fill-opacity', 0.75)
+      svg.append('text').attr('x', margin.left + legX + 14).attr('y', margin.top + legY + 12)
+        .attr('fill', '#ffffffaa').attr('font-size', 8.5).attr('font-family', 'JetBrains Mono, monospace')
+        .text(a.length > 14 ? a.slice(0, 14) + '…' : a)
+      legY += 18
+    })
+    // Legend: flagged marker
+    legY += 6
+    svg.append('circle').attr('cx', margin.left + legX + 5).attr('cy', margin.top + legY + 8)
+      .attr('r', 5).attr('fill', 'none').attr('stroke', '#ef4444').attr('stroke-width', 2)
+    svg.append('text').attr('x', margin.left + legX + 14).attr('y', margin.top + legY + 12)
+      .attr('fill', '#ffffffaa').attr('font-size', 8.5).attr('font-family', 'JetBrains Mono, monospace')
+      .text('flagged')
+    legY += 18
+    // Legend: intersectional marker
+    const dpath = `M ${margin.left + legX + 5} ${margin.top + legY + 3} L ${margin.left + legX + 10} ${margin.top + legY + 8} L ${margin.left + legX + 5} ${margin.top + legY + 13} L ${margin.left + legX} ${margin.top + legY + 8} Z`
+    svg.append('path').attr('d', dpath).attr('fill', '#ffffff44').attr('stroke', '#ffffff66').attr('stroke-width', 1)
+    svg.append('text').attr('x', margin.left + legX + 14).attr('y', margin.top + legY + 12)
+      .attr('fill', '#ffffffaa').attr('font-size', 8.5).attr('font-family', 'JetBrains Mono, monospace')
+      .text('intersectional')
 
     return () => { tooltip.remove() }
   }, [points, hotspots])
 
   return (
-    <svg ref={ref} width="100%" height={360}
+    <svg ref={ref} width="100%" height={400}
       className="rounded-xl overflow-visible" style={{ background: 'rgba(255,255,255,0.02)' }} />
   )
 }
@@ -851,7 +946,7 @@ export default function ResultsPage() {
                 <div className="md:col-span-2 glass rounded-2xl p-5 border border-white/5">
                   <h3 className="font-display font-semibold text-white text-sm mb-1">Bias Topology Map</h3>
                   <p className="text-white/30 text-xs mb-4 font-mono">
-                    Each point is a model prediction. Colour = bias magnitude. Red circles = hotspot clusters.
+                    Each point = one demographic group. x = Statistical Parity Difference. y = Positive Rate. Size = group size. Dashed rings = flagged hotspots.
                   </p>
                   <BiasMap points={carto?.map_points || []} hotspots={carto?.hotspots || []} />
                 </div>
