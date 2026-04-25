@@ -148,8 +148,26 @@ export default function RedTeamPage() {
   }
 
   const AGENT_NODES = ['attack', 'evaluate', 'decide_patch', 'patch', 'validate', 'report']
-  const validation = finalResults?.validation_results || {}
+  const report = finalResults?.final_report || finalResults || {}
+  const validation = report.validation || finalResults?.validation_results || {}
   const improved = validation.improved || []
+  const patchesApplied = report.patches_applied ?? finalResults?.patch_results?.applied?.length ?? 0
+  const fairnessDelta = report.remediated_fairness || {}
+  const modelArtifact = report.patched_model_artifact || null
+
+  const downloadPatchedModel = () => {
+    if (!modelArtifact?.available || !modelArtifact?.pickle_b64) return
+    const bytes = Uint8Array.from(atob(modelArtifact.pickle_b64), c => c.charCodeAt(0))
+    const blob = new Blob([bytes], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = modelArtifact.filename || 'fairlens-remediated-model.pkl'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
@@ -213,7 +231,7 @@ export default function RedTeamPage() {
             <div className="mt-4 p-3 rounded-xl bg-signal-green/5 border border-signal-green/20">
               <div className="text-signal-green font-mono text-xs font-semibold mb-1">✓ Agent complete</div>
               <div className="text-white/40 text-xs">
-                {finalResults.patches_applied} patches · {store.confirmedBiases.length} biases targeted
+                {patchesApplied} patches · {store.confirmedBiases.length} biases targeted
               </div>
             </div>
           )}
@@ -256,8 +274,8 @@ export default function RedTeamPage() {
 
             <div className="grid md:grid-cols-3 gap-4 mb-6">
               {[
-                { label: 'Iterations', value: finalResults.iterations || 1, color: 'text-white' },
-                { label: 'Patches Applied', value: finalResults.patches_applied, color: 'text-signal-green' },
+                { label: 'Iterations', value: report.iterations || 1, color: 'text-white' },
+                { label: 'Patches Applied', value: patchesApplied, color: 'text-signal-green' },
                 { label: 'Biases Improved', value: improved.length, color: 'text-signal-green' },
               ].map((card, i) => (
                 <div key={i} className="glass rounded-2xl p-5 border border-white/5">
@@ -265,6 +283,41 @@ export default function RedTeamPage() {
                   <div className={`font-display font-bold text-3xl ${card.color}`}>{card.value ?? 0}</div>
                 </div>
               ))}
+            </div>
+
+            <div className="glass rounded-2xl p-5 border border-white/5 mb-6">
+              <div className="text-xs font-mono text-white/30 uppercase tracking-wider mb-3">Remediation Outcome</div>
+              {fairnessDelta.before_avg_spd != null ? (
+                <div className="grid md:grid-cols-3 gap-4">
+                  <div>
+                    <div className="text-white/30 text-xs font-mono mb-1">Avg Bias Before</div>
+                    <div className="text-white font-display text-2xl">{fairnessDelta.before_avg_spd.toFixed(3)}</div>
+                  </div>
+                  <div>
+                    <div className="text-white/30 text-xs font-mono mb-1">Avg Bias After</div>
+                    <div className="text-signal-green font-display text-2xl">{fairnessDelta.after_avg_spd.toFixed(3)}</div>
+                  </div>
+                  <div>
+                    <div className="text-white/30 text-xs font-mono mb-1">Improvement</div>
+                    <div className="text-lens-light font-display text-2xl">+{fairnessDelta.improvement.toFixed(3)}</div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-white/50 text-sm">No directly measured post-patch disparity delta was available for this run.</p>
+              )}
+
+              <div className="mt-4 pt-4 border-t border-white/5">
+                <div className="text-white/30 text-xs font-mono mb-2">Use The Improved Model</div>
+                <p className="text-white/70 text-sm mb-3">
+                  {modelArtifact?.message || 'No remediated model artifact is available for this run.'}
+                </p>
+                {modelArtifact?.available && (
+                  <button onClick={downloadPatchedModel}
+                    className="px-4 py-2 rounded-xl bg-signal-green hover:bg-signal-green/90 text-white font-display font-semibold text-sm transition-all">
+                    Download Remediated Model
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex gap-4">
@@ -275,9 +328,12 @@ export default function RedTeamPage() {
               <button onClick={async () => {
                 try {
                   const fullReport = {
-                    ...store.cartographyResults,
-                    constitution: store.constitutionResults ?? null,
-                    proxy_hunt: store.proxyResults ?? null,
+                    ...(store.crossAnalysisResults?.cartography ?? store.cartographyResults ?? {}),
+                    constitution: store.crossAnalysisResults?.constitution ?? store.constitutionResults ?? null,
+                    proxy_hunt: store.crossAnalysisResults?.proxy ?? store.proxyResults ?? null,
+                    model_probe: store.modelProbeResults ?? null,
+                    dataset_probe: store.datasetProbeResults ?? null,
+                    cross_synthesis: store.crossAnalysisResults?.cross_synthesis ?? null,
                     redteam: finalResults,
                   }
                   await exportPdfReport(fullReport)

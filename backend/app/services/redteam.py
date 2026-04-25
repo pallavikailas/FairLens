@@ -22,8 +22,9 @@ import numpy as np
 from typing import Dict, List, Any, Optional, AsyncGenerator
 import logging
 import json
+import base64
+import pickle
 from datetime import datetime
-from sklearn.preprocessing import LabelEncoder
 
 from langgraph.graph import StateGraph, END
 from app.services.gemini_client import ask_gemini
@@ -64,20 +65,8 @@ class FairnessRedTeamAgent:
 
     @staticmethod
     def _safe_predict(model, X: pd.DataFrame):
-        """Predict with automatic label-encoding fallback for categorical columns."""
-        try:
-            return model.predict(X)
-        except ValueError:
-            raise  # permanent failures (wrong model type, 404) — don't mask or retry
-        except Exception:
-            X_enc = X.copy()
-            le = LabelEncoder()
-            for col in X_enc.select_dtypes(include=["object", "category"]).columns:
-                try:
-                    X_enc[col] = le.fit_transform(X_enc[col].astype(str))
-                except Exception:
-                    X_enc[col] = 0
-            return model.predict(X_enc.fillna(0))
+        """Predict without fabricating encodings or synthetic fallback values."""
+        return model.predict(X)
 
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph agent workflow."""
@@ -140,9 +129,11 @@ class FairnessRedTeamAgent:
         }
 
         last_log_len = 0
+        latest_state = state
         for step_output in self.graph.stream(state):
             node_name = list(step_output.keys())[0]
             node_state = step_output[node_name]
+            latest_state = node_state
             full_log = node_state.get("log", [])
             # Yield only new log lines to avoid frontend duplication
             new_lines = full_log[last_log_len:]
@@ -155,7 +146,7 @@ class FairnessRedTeamAgent:
             }
 
         # Strip non-serialisable fields (DataFrame, ndarray, model object) from final state
-        safe_state = {k: v for k, v in state.items() if k not in ("model", "X_train", "y_train")}
+        safe_state = {k: v for k, v in latest_state.items() if k not in ("model", "X_train", "y_train")}
         yield {"node": "complete", "status": "done", "results": safe_state}
 
     # ── Agent Nodes ──────────────────────────────────────────────────────────
@@ -215,8 +206,8 @@ class FairnessRedTeamAgent:
         log = state.get("log", [])
 
         if not probes:
-            log.append("[Evaluator Agent] No probes to evaluate — using cartography fallback")
-            evaluation = self._cartography_fallback_evaluation(state, [], log)
+            log.append("[Evaluator Agent] No valid probes could be generated for the selected attributes.")
+            evaluation = self._unevaluable_results(state, "no probes generated")
             return {**state, "evaluation_results": evaluation, "log": log}
 
         log.append(f"[Evaluator Agent] Running {len(probes)} probes through model...")
@@ -235,8 +226,8 @@ class FairnessRedTeamAgent:
             else:
                 batch_probs = None
         except Exception as e:
-            log.append(f"[Evaluator Agent] Batch prediction failed: {e} — using cartography fallback")
-            evaluation = self._cartography_fallback_evaluation(state, [], log)
+            log.append(f"[Evaluator Agent] Batch prediction failed: {e}")
+            evaluation = self._unevaluable_results(state, f"prediction failed: {e}")
             return {**state, "evaluation_results": evaluation, "log": log}
 
         results = []
@@ -290,9 +281,6 @@ class FairnessRedTeamAgent:
                 "sample_count": len(group),
             })
 
-        # ── Cartography fallback: upgrade near-zero probe disparities ────────
-        evaluation = self._cartography_fallback_evaluation(state, evaluation, log)
-
         n_confirmed = sum(1 for e in evaluation if e["bias_confirmed"])
         disparity_summary = ", ".join(f"{e['attribute']}={e['disparity']:.3f}" for e in evaluation)
         log.append(f"[Evaluator Agent] Bias confirmed in {n_confirmed}/{len(evaluation)} attributes "
@@ -300,82 +288,19 @@ class FairnessRedTeamAgent:
 
         return {**state, "evaluation_results": evaluation, "log": log}
 
-    def _cartography_fallback_evaluation(
-        self, state: Dict, evaluation: List[Dict], log: List[str]
-    ) -> List[Dict]:
-        """
-        When probe-based disparity is ~0 (text model ignores tabular protected column),
-        fall back to cartography SPD to confirm and quantify bias. Also handles attributes
-        that were skipped by the attack agent (high-cardinality text columns).
-        """
-        audit_results = state.get("audit_results", {})
-        slice_metrics = (audit_results.get("cartography") or {}).get("slice_metrics") or []
+    def _unevaluable_results(self, state: Dict, reason: str) -> List[Dict]:
         confirmed_biases = state.get("confirmed_biases", [])
-
-        # Build max abs(SPD) per single attribute from cartography
-        carto_spd: Dict[str, float] = {}
-        for m in slice_metrics:
-            attr = m.get("attribute", "")
-            if "+" in attr:
-                continue
-            spd = abs(m.get("statistical_parity_diff", 0))
-            carto_spd[attr] = max(carto_spd.get(attr, 0), spd)
-
-        evaluated_attrs = {e["attribute"] for e in evaluation}
-        confirmed_attr_magnitudes = {
-            b.get("attribute", ""): b.get("magnitude", 0)
-            for b in confirmed_biases if b.get("attribute")
-        }
-
-        # Add entries for confirmed biases that have no probes
-        for bias in confirmed_biases:
-            attr = bias.get("attribute", "")
-            if not attr or attr in evaluated_attrs:
-                continue
-            cspd = carto_spd.get(attr, 0)
-            # Always use the higher of cartography SPD or user-reported magnitude
-            magnitude = max(cspd, bias.get("magnitude", 0)) or 0.1
-            log.append(
-                f"[Evaluator Agent] '{attr}': user-confirmed bias — adding to evaluation "
-                f"(carto SPD={cspd:.3f}, user magnitude={bias.get('magnitude', 0):.3f})"
-            )
-            evaluation.append({
-                "attribute": attr,
-                "disparity": round(magnitude, 4),
-                "bias_confirmed": True,
-                "bias_source": "cartography" if cspd >= settings.DEMOGRAPHIC_PARITY_THRESHOLD else "user_confirmed",
+        return [
+            {
+                "attribute": bias.get("attribute", "unknown"),
+                "disparity": 0.0,
+                "bias_confirmed": False,
+                "status": "unevaluable",
+                "reason": reason,
                 "sample_count": 0,
-            })
-            evaluated_attrs.add(attr)
-
-        # Upgrade near-zero probe disparities for user-confirmed biases and high-SPD cartography
-        for e in evaluation:
-            if e.get("bias_confirmed"):
-                continue
-            attr = e["attribute"]
-            cspd = carto_spd.get(attr, 0)
-            user_magnitude = confirmed_attr_magnitudes.get(attr, 0)
-            # Upgrade if cartography shows SPD above threshold
-            if cspd >= settings.DEMOGRAPHIC_PARITY_THRESHOLD:
-                e["disparity"] = round(cspd, 4)
-                e["bias_confirmed"] = True
-                e["bias_source"] = "cartography"
-                log.append(
-                    f"[Evaluator Agent] '{attr}': probe disparity≈0 (model reads text, ignores "
-                    f"tabular column). Cartography confirms SPD={cspd:.3f} — upgraded to confirmed."
-                )
-            # Also upgrade if user explicitly confirmed this bias
-            elif attr in confirmed_attr_magnitudes:
-                magnitude = max(e["disparity"], user_magnitude) or 0.1
-                e["disparity"] = round(magnitude, 4)
-                e["bias_confirmed"] = True
-                e["bias_source"] = "user_confirmed"
-                log.append(
-                    f"[Evaluator Agent] '{attr}': user-confirmed bias — upgraded to confirmed "
-                    f"(probe disparity={e['disparity']:.3f})"
-                )
-
-        return evaluation
+            }
+            for bias in confirmed_biases
+        ]
 
     def _decide_patch_node(self, state: Dict) -> Dict:
         """Use Gemini to decide: is the evidence strong enough to patch?"""
@@ -425,8 +350,8 @@ class FairnessRedTeamAgent:
                         f" IMPORTANT: Your decision must be independent of {attr}. "
                         "Apply equal standards regardless of demographic group."
                     )
-                    if hasattr(model, "_prompt_template"):
-                        model._prompt_template = model._prompt_template + fairness_note
+                    if hasattr(model, "prompt_template"):
+                        model.prompt_template = model.prompt_template + fairness_note
                     log.append(f"[Patcher Agent] Injected fairness constraint for '{attr}' into prompt template")
                     patch_results["applied"].append({"strategy": strategy, "attribute": attr})
 
@@ -450,6 +375,7 @@ class FairnessRedTeamAgent:
                     # each group's effective positive rate equals the overall rate.
                     slice_metrics = (state.get("audit_results", {}).get("cartography") or {}).get("slice_metrics") or []
                     corrections: Dict[str, float] = {}
+                    before_rates: Dict[str, float] = {}
                     overall_rate = None
                     for m in slice_metrics:
                         if m.get("attribute") == attr and "+" not in m.get("attribute", ""):
@@ -457,11 +383,16 @@ class FairnessRedTeamAgent:
                                 overall_rate = m.get("overall_rate", 0)
                             val = str(m.get("value", ""))
                             pos_rate = m.get("positive_rate", 0)
+                            before_rates[val] = float(pos_rate)
                             if pos_rate > 0 and overall_rate and overall_rate > 0:
                                 corrections[val] = round(overall_rate / pos_rate, 4)
                     if corrections:
                         group_corrections = state.get("group_corrections", {})
-                        group_corrections[attr] = {"correction_factors": corrections, "target_rate": overall_rate}
+                        group_corrections[attr] = {
+                            "correction_factors": corrections,
+                            "target_rate": overall_rate,
+                            "before_rates": before_rates,
+                        }
                         state["group_corrections"] = group_corrections
                         log.append(
                             f"[Patcher Agent] Demographic parity correction for '{attr}': "
@@ -497,10 +428,8 @@ class FairnessRedTeamAgent:
         """
         model = state["model"]
         X_train = state["X_train"]
-        y_train = state["y_train"]
         log = state.get("log", [])
         group_corrections = state.get("group_corrections", {})
-        plan = state.get("mitigation_plan", [])
 
         log.append("[Validator Agent] Re-evaluating bias metrics post-patch...")
 
@@ -509,17 +438,16 @@ class FairnessRedTeamAgent:
         for e in state.get("evaluation_results", []):
             attr = e["attribute"]
             old_disparity = e.get("disparity", 0)
-            bias_source = e.get("bias_source", "probes")
 
             # Strategy B: correction-factor validation (no model inference needed)
-            if attr in group_corrections or bias_source == "cartography":
+            if attr in group_corrections:
                 corrections_entry = group_corrections.get(attr, {})
                 if corrections_entry:
-                    # Correction factors equalize rates by design → new SPD approaches 0
                     target_rate = corrections_entry.get("target_rate", 0)
                     correction_factors = corrections_entry.get("correction_factors", {})
+                    before_rates = corrections_entry.get("before_rates", {})
                     corrected_rates = {
-                        val: min(target_rate * factor, 1.0)
+                        val: min(before_rates.get(val, target_rate) * factor, 1.0)
                         for val, factor in correction_factors.items()
                     }
                     new_disparity = max(corrected_rates.values()) - min(corrected_rates.values()) if corrected_rates else 0.0
@@ -534,7 +462,7 @@ class FairnessRedTeamAgent:
 
             # Strategy A: re-run predictions for trainable / predict_proba models
             if attr not in X_train.columns:
-                validation["improved"].append({"attribute": attr, "before": old_disparity, "after": 0.0})
+                validation["unchanged"].append(attr)
                 continue
 
             try:
@@ -589,12 +517,56 @@ class FairnessRedTeamAgent:
             "biases_regressed": len(validation.get("regressed", [])),
             "validation": validation,
             "mitigation_plan": state.get("mitigation_plan", []),
+            "remediated_fairness": self._fairness_delta(validation),
+            "patched_model_artifact": self._serialise_model_artifact(state.get("model")),
             "log_summary": log[-10:],
             "status": "complete",
         }
 
         log.append("[Report Agent] Done. Report ready.")
         return {**state, "final_report": report, "status": "complete", "log": log}
+
+    @staticmethod
+    def _fairness_delta(validation: Dict[str, List]) -> Dict[str, Any]:
+        measured = []
+        for group in ("improved", "regressed"):
+            for item in validation.get(group, []):
+                if isinstance(item, dict) and "before" in item and "after" in item:
+                    measured.append(item)
+
+        if not measured:
+            return {"before_avg_spd": None, "after_avg_spd": None, "improvement": None}
+
+        before = float(np.mean([float(x["before"]) for x in measured]))
+        after = float(np.mean([float(x["after"]) for x in measured]))
+        return {
+            "before_avg_spd": round(before, 4),
+            "after_avg_spd": round(after, 4),
+            "improvement": round(before - after, 4),
+        }
+
+    @staticmethod
+    def _serialise_model_artifact(model: Any) -> Optional[Dict[str, Any]]:
+        raw = getattr(model, "_model", model)
+        if not hasattr(raw, "fit"):
+            return {
+                "available": False,
+                "message": "This remediation was applied to a remote/API model. Reuse the mitigation plan manually because no patched model artifact can be exported.",
+            }
+        try:
+            payload = base64.b64encode(pickle.dumps(raw)).decode("ascii")
+            return {
+                "available": True,
+                "filename": "fairlens-remediated-model.pkl",
+                "format": "pickle",
+                "pickle_b64": payload,
+                "message": "Download the remediated pickle model and replace your previous deployed artifact with it.",
+            }
+        except Exception as exc:
+            return {
+                "available": False,
+                "message": f"FairLens remediated the model in memory, but export failed: {exc}",
+            }
 
     # ── Routing functions ────────────────────────────────────────────────────
 

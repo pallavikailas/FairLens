@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from app.services.reference_dataset import (
     generate_reference_dataset,
+    generate_text_reference_dataset,
     generate_model_specific_probe,
     REFERENCE_PROTECTED_COLS,
     REFERENCE_TARGET_COL,
@@ -37,6 +38,11 @@ _LLM_TYPES = {"GenerativeLLM", "OpenAI", "Gemini", "HuggingFace"}
 def _is_llm(model) -> bool:
     mt = (getattr(model, "get_model_type", lambda: "")() or "")
     return any(t in mt for t in _LLM_TYPES)
+
+
+def _uses_text_reference_probe(model) -> bool:
+    mt = (getattr(model, "get_model_type", lambda: "")() or "")
+    return mt == "HuggingFace"
 
 
 class ModelBiasProbe:
@@ -55,7 +61,11 @@ class ModelBiasProbe:
         logger.info(f"[{audit_id}] Starting model bias probe with embedded reference dataset")
 
         # ── 1. Build probe dataset ────────────────────────────────────────────
-        if _is_llm(model):
+        if _uses_text_reference_probe(model):
+            ref_df, ref_csv = generate_text_reference_dataset()
+            probe_protected = REFERENCE_PROTECTED_COLS
+            probe_target = REFERENCE_TARGET_COL
+        elif _is_llm(model):
             # LLM models handle any text; use the fixed standard reference dataset
             ref_df, ref_csv = generate_reference_dataset()
             probe_protected = REFERENCE_PROTECTED_COLS
@@ -95,57 +105,11 @@ class ModelBiasProbe:
             logger.error(f"[{audit_id}] Model prediction on reference dataset failed: {e}")
             raise ValueError(f"Model could not be probed on reference dataset: {e}")
 
-        # ── Degenerate prediction guard + adaptive calibration ────────────────
-        # If >97% same class, try multiple input distributions to find one that
-        # produces a realistic mix of predictions before giving up.
-        n_pos = sum(model_predictions)
-        n_tot = len(model_predictions)
-        pos_rate = n_pos / n_tot if n_tot else 0.5
-
-        if (pos_rate <= 0.03 or pos_rate >= 0.97) and not _is_llm(model) and feature_cols:
-            logger.warning(f"[{audit_id}] Degenerate probe ({pos_rate:.1%} positive) — trying adaptive calibration")
-            cal = self._calibrate_probe(model, feature_cols, probe_protected, ref_df, probe_target)
-            if cal is not None:
-                ref_df, ref_csv, X_ref, model_predictions = cal
-                n_pos = sum(model_predictions)
-                n_tot = len(model_predictions)
-                pos_rate = n_pos / n_tot
-                # Update probe_protected to include any demographics injected during calibration
-                demo_cols = [c for c in ("gender", "race", "age_group") if c in ref_df.columns]
-                if demo_cols:
-                    probe_protected = demo_cols
-                logger.info(f"[{audit_id}] Calibrated probe: {pos_rate:.1%} positive rate on {n_tot} rows")
-            else:
-                majority_class  = 1 if pos_rate >= 0.5 else 0
-                majority_rate   = pos_rate if majority_class == 1 else 1 - pos_rate
-                logger.warning(f"[{audit_id}] Calibration exhausted — returning degenerate warning")
-                return {
-                    "audit_id":               audit_id,
-                    "analysis_type":          "model_probe",
-                    "degenerate":             True,
-                    "degenerate_message": (
-                        f"All {n_tot} calibration attempts produced the same prediction "
-                        f"(class {majority_class}, {majority_rate:.0%} of rows). "
-                        "The model likely requires domain-specific feature combinations outside "
-                        "the range of any generic synthetic dataset. "
-                        "Upload a representative dataset — Phase 3 (Cross-Analysis) will then "
-                        "directly measure demographic bias on real inputs."
-                    ),
-                    "reference_dataset_size":  n_tot,
-                    "reference_protected_cols": probe_protected,
-                    "reference_target_col":    probe_target,
-                    "cartography":             {},
-                    "constitution":            {},
-                    "model_biases":            [],
-                    "summary": {
-                        "fair_score":             None,
-                        "bias_count":             0,
-                        "most_biased_attribute":  None,
-                        "analysis_source":        "embedded_reference_dataset",
-                        "model_type":             model_type,
-                        "degenerate":             True,
-                    },
-                }
+        diagnostics = self._prediction_diagnostics(
+            ref_df=ref_df,
+            predictions=model_predictions,
+            target_col=probe_target,
+        )
 
         # ── 3. Bias Cartography on reference data + model predictions ────────
         carto_results = await cartography_service.run_cartography(
@@ -155,6 +119,13 @@ class ModelBiasProbe:
             model_predictions=model_predictions,
             audit_id=audit_id,
         )
+        if diagnostics["collapsed_output"] or diagnostics["near_constant_output"]:
+            carto_results["fair_score"] = {
+                "score": 0,
+                "label": "Invalid",
+                "color": "red",
+                "reason": diagnostics["reason"],
+            }
 
         # ── 4. Counterfactual Constitution on reference data + model ─────────
         # Pass the FULL ref_df (including injected demographics) so constitution can
@@ -177,6 +148,17 @@ class ModelBiasProbe:
 
         # ── 5. Extract structured bias list ──────────────────────────────────
         model_biases = self._extract_model_biases(carto_results, constitution_results)
+        if diagnostics["collapsed_output"] or diagnostics["near_constant_output"]:
+            model_biases.insert(0, {
+                "attribute": "model_output_distribution",
+                "value": diagnostics["reason"],
+                "type": "model_failure",
+                "severity": "critical",
+                "magnitude": 1.0,
+                "source": "model_probe_diagnostics",
+                "positive_rate": diagnostics["positive_rate"],
+                "accuracy_vs_reference": diagnostics["accuracy_vs_reference"],
+            })
 
         return {
             "audit_id":              audit_id,
@@ -186,6 +168,7 @@ class ModelBiasProbe:
             "reference_target_col":  probe_target,
             "cartography":           carto_results,
             "constitution":          constitution_results,
+            "prediction_diagnostics": diagnostics,
             "model_biases":          model_biases,
             "summary": {
                 "fair_score":             carto_results.get("fair_score", {}),
@@ -193,6 +176,7 @@ class ModelBiasProbe:
                 "most_biased_attribute":  model_biases[0]["attribute"] if model_biases else None,
                 "analysis_source":        "embedded_reference_dataset",
                 "model_type":             model_type,
+                "prediction_diagnostics": diagnostics,
             },
         }
 
@@ -384,6 +368,37 @@ class ModelBiasProbe:
                 biases[attr] = entry
 
         return sorted(biases.values(), key=lambda x: x["magnitude"], reverse=True)
+
+    @staticmethod
+    def _prediction_diagnostics(ref_df: pd.DataFrame, predictions: List[int], target_col: str) -> Dict[str, Any]:
+        pred = np.array(predictions, dtype=int)
+        unique_values = sorted(np.unique(pred).tolist())
+        positive_rate = float(pred.mean()) if len(pred) else 0.0
+        collapsed_output = len(unique_values) <= 1
+        near_constant_output = positive_rate <= 0.01 or positive_rate >= 0.99
+
+        accuracy_vs_reference = None
+        if target_col in ref_df.columns:
+            y_true = pd.to_numeric(ref_df[target_col], errors="coerce").fillna(0).astype(int).values
+            if len(y_true) == len(pred):
+                accuracy_vs_reference = round(float((y_true == pred).mean()), 4)
+
+        reason = ""
+        if collapsed_output:
+            label = unique_values[0] if unique_values else 0
+            reason = f"Model predicted a single class ({label}) for every reference sample."
+        elif near_constant_output:
+            reason = f"Model output was near-constant across the reference probe (positive rate {positive_rate:.3f})."
+
+        return {
+            "unique_prediction_count": len(unique_values),
+            "unique_prediction_values": unique_values,
+            "positive_rate": round(positive_rate, 4),
+            "collapsed_output": collapsed_output,
+            "near_constant_output": near_constant_output,
+            "accuracy_vs_reference": accuracy_vs_reference,
+            "reason": reason,
+        }
 
 
 model_probe_service = ModelBiasProbe()

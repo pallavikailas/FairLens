@@ -453,6 +453,7 @@ export default function ResultsPage() {
 
   // Biases from Phase 1 (model probe)
   const modelProbeBiases: any[] = modelProbe?.model_biases ?? []
+  const modelProbeDiagnostics = modelProbe?.summary?.prediction_diagnostics ?? modelProbe?.prediction_diagnostics ?? null
   // Biases from Phase 2 (dataset probe)
   const datasetProbeBiases: any[] = datasetProbe?.dataset_biases ?? []
 
@@ -655,83 +656,72 @@ export default function ResultsPage() {
           {activeTab === 'model_probe' && (
             <div className="space-y-4">
               {modelProbe ? (
-                modelProbe.degenerate ? (
-                  /* Degenerate probe warning */
-                  <div className="space-y-4">
-                    <div className="rounded-2xl p-6 border border-signal-amber/40 bg-signal-amber/5">
-                      <div className="flex items-start gap-4">
-                        <div className="text-signal-amber text-2xl flex-shrink-0">⚠</div>
-                        <div>
-                          <div className="text-signal-amber font-mono text-sm font-semibold mb-2">
-                            Model Probe Inconclusive — Synthetic Data Out-of-Distribution
-                          </div>
-                          <p className="text-white/60 text-sm leading-relaxed mb-3">{modelProbe.degenerate_message}</p>
-                          <div className="text-white/40 text-xs font-mono space-y-1">
-                            <div>› Reference probe size: {modelProbe.reference_dataset_size} rows</div>
-                            <div>› Protected cols tested: {modelProbe.reference_protected_cols?.join(', ')}</div>
-                            <div>› What this means: the model was not trained on data with demographic features matching our reference dataset, so it collapses all predictions to one class on synthetic inputs.</div>
-                            <div>› What to do: upload a representative dataset — Phase 3 Cross-Analysis will then measure real demographic bias using your actual data.</div>
-                          </div>
-                        </div>
+                <>
+                  {(modelProbeDiagnostics?.collapsed_output || modelProbeDiagnostics?.near_constant_output) && (
+                    <div className="glass rounded-2xl p-5 border border-signal-red/20 bg-signal-red/5">
+                      <div className="text-xs font-mono text-signal-red mb-2">Probe Validity Warning</div>
+                      <p className="text-white/80 text-sm">{modelProbeDiagnostics?.reason}</p>
+                      <p className="text-white/40 text-xs mt-2">
+                        Phase 1 fairness metrics are not trustworthy when the model outputs an almost constant prediction on the reference probe.
+                      </p>
+                      <div className="text-white/40 text-xs font-mono space-y-1 mt-3">
+                        <div>{'>'} Reference probe size: {modelProbe.reference_dataset_size} rows</div>
+                        <div>{'>'} Protected cols tested: {modelProbe.reference_protected_cols?.join(', ')}</div>
+                        <div>{'>'} What this means: the model is not producing informative variation on the embedded probe.</div>
+                        <div>{'>'} What to do: use Phase 3 Cross-Analysis on your real dataset to measure actual demographic bias.</div>
                       </div>
                     </div>
-                    <div className="glass rounded-2xl p-5 border border-white/5 text-center">
-                      <div className="text-white/20 text-xs font-mono">FairScore™ not available — probe inconclusive</div>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid md:grid-cols-3 gap-4">
-                      <div className="glass rounded-2xl p-5 border border-lens/15">
-                        <div className="text-xs font-mono text-white/40 mb-2">Model FairScore™ (Reference Dataset)</div>
-                        <div className={`font-display font-bold text-4xl ${
-                          (modelProbe.summary?.fair_score?.color === 'green') ? 'text-green-400' :
-                          (modelProbe.summary?.fair_score?.color === 'yellow') ? 'text-yellow-400' : 'text-red-400'
-                        }`}>{modelProbe.summary?.fair_score?.score ?? '—'}</div>
-                        <div className="text-white/30 text-xs mt-1">{modelProbe.summary?.fair_score?.label} · {modelProbe.reference_dataset_size} reference rows</div>
-                      </div>
-                      <div className="glass rounded-2xl p-5 border border-white/5">
-                        <div className="text-xs font-mono text-white/40 mb-2">Hidden Biases Detected</div>
-                        <div className="text-signal-red font-display font-bold text-4xl">{modelProbeBiases.length}</div>
-                        <div className="text-white/30 text-xs mt-1">intrinsic model biases</div>
-                      </div>
-                      <div className="glass rounded-2xl p-5 border border-white/5">
-                        <div className="text-xs font-mono text-white/40 mb-2">Most Biased Attribute</div>
-                        <div className="text-lens-light font-display font-bold text-xl">{modelProbe.summary?.most_biased_attribute ?? '—'}</div>
-                        <div className="text-white/30 text-xs mt-1">on reference probe</div>
-                      </div>
+                  )}
+                  <div className="grid md:grid-cols-3 gap-4">
+                    <div className="glass rounded-2xl p-5 border border-lens/15">
+                      <div className="text-xs font-mono text-white/40 mb-2">Model FairScore (Reference Dataset)</div>
+                      <div className={`font-display font-bold text-4xl ${
+                        (modelProbe.summary?.fair_score?.color === 'green') ? 'text-green-400' :
+                        (modelProbe.summary?.fair_score?.color === 'yellow') ? 'text-yellow-400' : 'text-red-400'
+                      }`}>{modelProbe.summary?.fair_score?.score ?? '-'}</div>
+                      <div className="text-white/30 text-xs mt-1">{modelProbe.summary?.fair_score?.label} · {modelProbe.reference_dataset_size} reference rows</div>
                     </div>
                     <div className="glass rounded-2xl p-5 border border-white/5">
-                      <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Detected Model Biases</div>
-                      <div className="space-y-2">
-                        {modelProbeBiases.map((b: any, i: number) => (
-                          <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-white/2 border border-white/5">
-                            <div>
-                              <span className="text-white/80 text-xs font-mono font-semibold">{b.attribute}</span>
-                              <span className="text-white/40 text-xs ml-2">{b.value}</span>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <span className="text-white/30 text-xs font-mono">magnitude {b.magnitude?.toFixed(3)}</span>
-                              <SeverityBadge level={b.severity} />
-                            </div>
-                          </div>
-                        ))}
-                        {modelProbeBiases.length === 0 && <div className="text-white/20 text-sm font-mono text-center py-4">No hidden biases detected in model probe</div>}
-                      </div>
+                      <div className="text-xs font-mono text-white/40 mb-2">Hidden Biases Detected</div>
+                      <div className="text-signal-red font-display font-bold text-4xl">{modelProbeBiases.length}</div>
+                      <div className="text-white/30 text-xs mt-1">intrinsic model biases</div>
                     </div>
-                    {modelProbe.cartography?.gemini_analysis?.headline && (
-                      <div className="glass rounded-2xl p-5 border border-lens/15">
-                        <div className="text-xs font-mono text-lens-light mb-2">Gemini Analysis — Model Probe</div>
-                        <p className="text-white/80 text-sm mb-2">{modelProbe.cartography.gemini_analysis.headline}</p>
-                        <ul className="space-y-1">
-                          {modelProbe.cartography.gemini_analysis.key_findings?.map((f: string, i: number) => (
-                            <li key={i} className="text-white/50 text-xs font-mono flex gap-2"><span className="text-lens-light">›</span>{f}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                )
+                    <div className="glass rounded-2xl p-5 border border-white/5">
+                      <div className="text-xs font-mono text-white/40 mb-2">Most Biased Attribute</div>
+                      <div className="text-lens-light font-display font-bold text-xl">{modelProbe.summary?.most_biased_attribute ?? '-'}</div>
+                      <div className="text-white/30 text-xs mt-1">on reference probe</div>
+                    </div>
+                  </div>
+                  <div className="glass rounded-2xl p-5 border border-white/5">
+                    <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Detected Model Biases</div>
+                    <div className="space-y-2">
+                      {modelProbeBiases.map((b: any, i: number) => (
+                        <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-white/2 border border-white/5">
+                          <div>
+                            <span className="text-white/80 text-xs font-mono font-semibold">{b.attribute}</span>
+                            <span className="text-white/40 text-xs ml-2">{b.value}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-white/30 text-xs font-mono">magnitude {b.magnitude?.toFixed(3)}</span>
+                            <SeverityBadge level={b.severity} />
+                          </div>
+                        </div>
+                      ))}
+                      {modelProbeBiases.length === 0 && <div className="text-white/20 text-sm font-mono text-center py-4">No hidden biases detected in model probe</div>}
+                    </div>
+                  </div>
+                  {modelProbe.cartography?.gemini_analysis?.headline && (
+                    <div className="glass rounded-2xl p-5 border border-lens/15">
+                      <div className="text-xs font-mono text-lens-light mb-2">Gemini Analysis - Model Probe</div>
+                      <p className="text-white/80 text-sm mb-2">{modelProbe.cartography.gemini_analysis.headline}</p>
+                      <ul className="space-y-1">
+                        {modelProbe.cartography.gemini_analysis.key_findings?.map((f: string, i: number) => (
+                          <li key={i} className="text-white/50 text-xs font-mono flex gap-2"><span className="text-lens-light">{'>'}</span>{f}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
               ) : (
                 <div className="glass rounded-2xl p-8 text-center text-white/30 text-sm font-mono border border-white/5">
                   Model probe results not available
@@ -792,7 +782,7 @@ export default function ResultsPage() {
             </div>
           )}
 
-          {/* ── Phase 3: Cross-Analysis Synthesis ─────────────────────────── */}
+          {/* Phase 3: Cross-Analysis Synthesis */}
           {activeTab === 'cross_synthesis' && (
             <div className="space-y-4">
               {crossSynth ? (
@@ -809,7 +799,7 @@ export default function ResultsPage() {
                       )}
                       <ul className="space-y-1">
                         {crossSynth.gemini_analysis.key_findings?.map((f: string, i: number) => (
-                          <li key={i} className="text-white/50 text-xs font-mono flex gap-2"><span className="text-lens-light">›</span>{f}</li>
+                          <li key={i} className="text-white/50 text-xs font-mono flex gap-2"><span className="text-lens-light">{'>'}</span>{f}</li>
                         ))}
                       </ul>
                     </div>

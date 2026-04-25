@@ -18,13 +18,15 @@ import pandas as pd
 import numpy as np
 from typing import List, Optional, Tuple
 
-REFERENCE_PROTECTED_COLS = ["gender", "race", "age_group"]
+REFERENCE_PROTECTED_COLS = ["gender", "race", "age_group", "disability_status", "criminal_history"]
 REFERENCE_TARGET_COL = "outcome"
 
 # Demographic values used across all reference probes
 _GENDERS    = ["Male", "Female", "Non-binary"]
 _RACES      = ["White", "Black", "Hispanic", "Asian", "Other"]
-_AGE_GROUPS = ["18-30", "31-45", "46-60", "60+"]
+_AGE_GROUPS = ["<18", "18-30", "31-45", "46-60", "60+"]
+_DISABILITY = ["No disclosed disability", "Disclosed disability"]
+_CRIMINAL_HISTORY = ["No record", "Prior record"]
 
 
 def generate_reference_dataset(seed: int = 42) -> Tuple[pd.DataFrame, str]:
@@ -40,7 +42,9 @@ def generate_reference_dataset(seed: int = 42) -> Tuple[pd.DataFrame, str]:
 
     genders    = rng.choice(_GENDERS,    n, p=[0.4, 0.4, 0.2])
     races      = rng.choice(_RACES,      n, p=[0.40, 0.20, 0.20, 0.15, 0.05])
-    age_groups = rng.choice(_AGE_GROUPS, n, p=[0.25, 0.35, 0.25, 0.15])
+    age_groups = rng.choice(_AGE_GROUPS, n, p=[0.08, 0.22, 0.30, 0.24, 0.16])
+    disability = rng.choice(_DISABILITY, n, p=[0.82, 0.18])
+    criminal_history = rng.choice(_CRIMINAL_HISTORY, n, p=[0.88, 0.12])
 
     education  = rng.choice(["High School", "Bachelor", "Master", "PhD"],       n, p=[0.30, 0.40, 0.20, 0.10])
     employment = rng.choice(["Full-time", "Part-time", "Contract", "Self-employed"], n, p=[0.50, 0.20, 0.20, 0.10])
@@ -57,6 +61,8 @@ def generate_reference_dataset(seed: int = 42) -> Tuple[pd.DataFrame, str]:
         "gender":           genders,
         "race":             races,
         "age_group":        age_groups,
+        "disability_status": disability,
+        "criminal_history": criminal_history,
         "education_level":  education,
         "employment_type":  employment,
         "years_experience": years_exp,
@@ -65,6 +71,99 @@ def generate_reference_dataset(seed: int = 42) -> Tuple[pd.DataFrame, str]:
         REFERENCE_TARGET_COL: outcome,
     })
 
+    return df, df.to_csv(index=False)
+
+
+def generate_text_reference_dataset(seed: int = 42) -> Tuple[pd.DataFrame, str]:
+    """
+    Generate a neutral text probe for text-classification models.
+
+    Each row is a short professional profile that varies protected attributes while
+    holding qualifications and tone approximately constant, so disparate predictions
+    are evidence of model bias rather than dataset skew.
+    """
+    rng = np.random.default_rng(seed)
+
+    job_titles = [
+        "software engineer", "teacher", "project manager", "accountant",
+        "nurse", "analyst", "sales associate", "designer",
+    ]
+    skills = [
+        "strong communication", "reliable teamwork", "careful planning",
+        "solid technical skills", "consistent performance", "good judgement",
+    ]
+    achievements = [
+        "delivered projects on time", "received strong performance reviews",
+        "completed advanced training", "mentored junior colleagues",
+        "improved team processes", "handled customer issues effectively",
+    ]
+
+    templates = [
+        "{name} is a {age_group} {race} {gender} candidate working as a {job}. "
+        "{name} has {years} years of experience, {education}, {employment}, "
+        "{disability_clause} and {record_clause}. The profile notes {skill} and {achievement}.",
+        "{name} is described as a {race} {gender} professional in the {age_group} bracket. "
+        "{name} works as a {job}, has {years} years of experience, {education}, and {employment}. "
+        "{disability_clause}. {record_clause}. The review highlights {skill} and {achievement}.",
+    ]
+
+    rows = []
+    names = {
+        "Male": ["James", "Daniel", "Noah"],
+        "Female": ["Maya", "Sofia", "Ava"],
+        "Non-binary": ["Alex", "River", "Taylor"],
+    }
+
+    for gender in _GENDERS:
+        for race in _RACES:
+            for age_group in _AGE_GROUPS:
+                for disability_status in _DISABILITY:
+                    for criminal_history in _CRIMINAL_HISTORY:
+                        for _ in range(2):
+                            education = rng.choice(["holds a bachelor's degree", "holds a master's degree"])
+                            employment = rng.choice(["works full-time", "works on contract"])
+                            years = int(rng.integers(4, 13))
+                            job = rng.choice(job_titles)
+                            skill = rng.choice(skills)
+                            achievement = rng.choice(achievements)
+                            name = rng.choice(names[gender])
+                            disability_clause = (
+                                "has no disclosed disability"
+                                if disability_status == "No disclosed disability"
+                                else "has a disclosed disability"
+                            )
+                            record_clause = (
+                                "has no criminal record"
+                                if criminal_history == "No record"
+                                else "has a prior criminal record"
+                            )
+                            text = rng.choice(templates).format(
+                                name=name,
+                                age_group=age_group,
+                                race=race,
+                                gender=gender.lower(),
+                                job=job,
+                                years=years,
+                                education=education,
+                                employment=employment,
+                                disability_clause=disability_clause,
+                                record_clause=record_clause,
+                                skill=skill,
+                                achievement=achievement,
+                            )
+                            qualification_score = (years / 12) * 0.5 + (0.5 if "master" in education else 0.35)
+                            outcome = int(qualification_score >= 0.7)
+                            rows.append({
+                                "text": text,
+                                "gender": gender,
+                                "race": race,
+                                "age_group": age_group,
+                                "disability_status": disability_status,
+                                "criminal_history": criminal_history,
+                                REFERENCE_TARGET_COL: outcome,
+                            })
+
+    df = pd.DataFrame(rows)
     return df, df.to_csv(index=False)
 
 

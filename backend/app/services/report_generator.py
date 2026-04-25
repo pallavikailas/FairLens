@@ -18,15 +18,15 @@ from reportlab.platypus import (
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
 # ── Colour palette ────────────────────────────────────────────────────────
-DARK  = colors.HexColor("#0f172a")
-PANEL = colors.HexColor("#1e293b")
-LENS  = colors.HexColor("#6366f1")
-GREEN = colors.HexColor("#22c55e")
-AMBER = colors.HexColor("#eab308")
-RED   = colors.HexColor("#ef4444")
-LIGHT = colors.HexColor("#e2e8f0")
-MUTED = colors.HexColor("#94a3b8")
-WHITE = colors.white
+DARK  = colors.HexColor("#111827")
+PANEL = colors.HexColor("#f8fafc")
+LENS  = colors.HexColor("#4f46e5")
+GREEN = colors.HexColor("#15803d")
+AMBER = colors.HexColor("#b45309")
+RED   = colors.HexColor("#b91c1c")
+LIGHT = colors.HexColor("#111827")
+MUTED = colors.HexColor("#475569")
+WHITE = colors.HexColor("#ffffff")
 
 
 def _score_color(score: int) -> colors.HexColor:
@@ -47,7 +47,7 @@ def _sev_color(sev: str) -> colors.HexColor:
 
 
 def _make_styles():
-    h1 = ParagraphStyle("h1", fontSize=20, textColor=WHITE, spaceAfter=4,
+    h1 = ParagraphStyle("h1", fontSize=20, textColor=LIGHT, spaceAfter=4,
                          fontName="Helvetica-Bold", alignment=TA_LEFT)
     h2 = ParagraphStyle("h2", fontSize=13, textColor=LENS, spaceAfter=6,
                          fontName="Helvetica-Bold", spaceBefore=14)
@@ -71,8 +71,9 @@ _TBL_BASE = [
     ("TOPPADDING", (0, 0), (-1, -1), 4),
     ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ("LEFTPADDING", (0, 0), (-1, -1), 6),
-    ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#334155")),
-    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [PANEL, DARK]),
+    ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#cbd5e1")),
+    ("TEXTCOLOR", (0, 1), (-1, -1), LIGHT),
+    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#ffffff"), colors.HexColor("#f8fafc")]),
 ]
 
 _HDR_STYLE = [
@@ -101,7 +102,6 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
     proxy_hunt = result.get("proxy_hunt") or {}
     redteam = result.get("redteam") or {}
     model_probe = result.get("model_probe") or {}
-    dataset_probe = result.get("dataset_probe") or {}
     audit_id = result.get("audit_id", "—")
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
@@ -116,10 +116,11 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
     header_tbl = Table(header_data, colWidths=["70%", "30%"])
     header_tbl.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("BACKGROUND", (0, 0), (-1, -1), DARK),
+        ("BACKGROUND", (0, 0), (-1, -1), PANEL),
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ("LEFTPADDING", (0, 0), (0, -1), 12),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
     ]))
     story.append(header_tbl)
     story.append(HRFlowable(width="100%", thickness=2, color=LENS, spaceAfter=10))
@@ -172,6 +173,36 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
         ]))
         story.append(score_tbl)
         story.append(Spacer(1, 10))
+
+    if model_probe:
+        probe_summary = model_probe.get("summary", {})
+        diagnostics = probe_summary.get("prediction_diagnostics") or model_probe.get("prediction_diagnostics") or {}
+        story.append(Paragraph("Phase 1: Embedded Reference Probe", h2))
+        story.append(Paragraph(
+            f"Reference rows: <b>{model_probe.get('reference_dataset_size', '—')}</b> &nbsp;|&nbsp; "
+            f"Biases detected: <b>{probe_summary.get('bias_count', 0)}</b> &nbsp;|&nbsp; "
+            f"Most biased attribute: <b>{probe_summary.get('most_biased_attribute', '—')}</b>",
+            meta,
+        ))
+        if diagnostics.get("collapsed_output") or diagnostics.get("near_constant_output"):
+            story.append(Paragraph(
+                f"<b>Probe validity warning:</b> {diagnostics.get('reason', 'Model output collapsed on the reference probe.')}",
+                ParagraphStyle("probe_warning", parent=body, textColor=RED),
+            ))
+        model_probe_biases = model_probe.get("model_biases") or []
+        if model_probe_biases:
+            rows = [["Attribute", "Type", "Magnitude", "Severity"]]
+            for item in model_probe_biases[:10]:
+                rows.append([
+                    Paragraph(str(item.get("attribute", "—")), mono),
+                    Paragraph(str(item.get("type", "—")), mono),
+                    Paragraph(f'{float(item.get("magnitude", 0)):.3f}', mono),
+                    Paragraph(str(item.get("severity", "—")).upper(), mono),
+                ])
+            tbl = Table(rows, colWidths=["28%", "28%", "18%", "26%"])
+            tbl.setStyle(TableStyle(_HDR_STYLE + _TBL_BASE))
+            story.append(tbl)
+            story.append(Spacer(1, 10))
 
     # ── Regulatory Compliance ───────────────────────────────────────────────
     if compliance_tags:
@@ -386,6 +417,15 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
             meta,
         ))
 
+        fairness_delta = rt_report.get("remediated_fairness") or {}
+        if fairness_delta.get("before_avg_spd") is not None:
+            story.append(Paragraph(
+                f"Average measured disparity improved from <b>{fairness_delta['before_avg_spd']:.3f}</b> "
+                f"to <b>{fairness_delta['after_avg_spd']:.3f}</b> "
+                f"(delta <b>{fairness_delta['improvement']:.3f}</b>).",
+                body,
+            ))
+
         # Mitigation plan
         if plan:
             story.append(Paragraph("Mitigation Plan", h3))
@@ -437,6 +477,17 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
                 val_tbl.setStyle(TableStyle(_HDR_STYLE + _TBL_BASE))
                 story.append(val_tbl)
                 story.append(Spacer(1, 8))
+
+        artifact = rt_report.get("patched_model_artifact") or {}
+        if artifact:
+            story.append(Paragraph("Using The Remediated Model", h3))
+            story.append(Paragraph(artifact.get("message", "No remediation artifact details available."), body))
+            if artifact.get("available"):
+                story.append(Paragraph(
+                    f"Artifact: <b>{artifact.get('filename', 'fairlens-remediated-model.pkl')}</b> "
+                    f"({artifact.get('format', 'pickle')})",
+                    mono,
+                ))
 
         # Activity log
         if log_summary:
