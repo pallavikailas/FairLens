@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from app.services.auto_detect import auto_detect_columns
 from app.services.dataset_loader import load_dataset_csv
 from app.services.dataset_probe import dataset_probe_service
+from app.services.compliance_mapper import check_compliance
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -78,6 +79,11 @@ async def run_dataset_probe(
         )
         result["detected_protected_cols"] = protected
         result["detected_target_col"]     = target
+        # Attach compliance tags to cartography sub-result
+        if "cartography" in result:
+            result["cartography"]["compliance_tags"] = check_compliance(
+                result["cartography"].get("slice_metrics", [])
+            )
         return JSONResponse(content=result)
     except Exception as e:
         logger.exception(f"[{audit_id}] Dataset probe failed")

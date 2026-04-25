@@ -225,25 +225,36 @@ Return ONLY this JSON:
             return {"severity": "unknown", "headline": "Analysis unavailable", "key_findings": []}
 
     def _generate_map_points(self, df, protected_cols, target_col, slice_metrics, model_predictions=None):
-        present = [c for c in protected_cols if c in df.columns]
-        if model_predictions is not None and len(model_predictions) == len(df):
-            target = pd.Series(model_predictions, index=df.index, dtype=float)
-        elif target_col in df.columns:
-            target = pd.to_numeric(df[target_col], errors="coerce").fillna(0)
-        else:
-            target = pd.Series([0] * len(df))
-        bias_lookup = {m["label"]: m["bias_magnitude"] for m in slice_metrics}
+        """
+        Returns one point per demographic slice (not per row).
+        x = statistical_parity_diff  (negative = disadvantaged group)
+        y = positive_rate
+        Each point represents how a demographic group compares to the population average.
+        """
+        if not slice_metrics:
+            return []
+
+        # Use single-attribute slices only — intersectional slices are shown as hotspots
+        single = [m for m in slice_metrics if "∩" not in m["label"]]
+
+        # Deduplicate: keep highest-magnitude entry per unique label
+        seen: dict = {}
+        for m in single:
+            lbl = m["label"]
+            if lbl not in seen or m["bias_magnitude"] > seen[lbl]["bias_magnitude"]:
+                seen[lbl] = m
+
         points = []
-        sample = df.sample(min(500, len(df)), random_state=42)
-        for idx, row in sample.iterrows():
-            bias_score = max((bias_lookup.get(f"{col}={row[col]}", 0.0) for col in present if col in row), default=0.0)
-            pred_val = float(target.loc[idx]) if idx in target.index else 0.0
+        for m in seen.values():
             points.append({
-                "x": round(float(bias_score) + np.random.normal(0, 0.02), 4),
-                "y": round(pred_val + np.random.normal(0, 0.05), 4),
-                "bias_score": round(bias_score, 4),
-                "slice_label": " | ".join(f"{col}={row[col]}" for col in present if col in row) or "unknown",
-                "prediction": int(pred_val),
+                "x":           round(float(m["statistical_parity_diff"]), 4),
+                "y":           round(float(m["positive_rate"]), 4),
+                "bias_score":  round(float(m["bias_magnitude"]), 4),
+                "slice_label": m["label"],
+                "attribute":   m.get("attribute", ""),
+                "size":        m["size"],
+                "flagged":     bool(m.get("flagged", False)),
+                "overall_rate": round(float(m.get("overall_rate", 0)), 4),
             })
         return points
 

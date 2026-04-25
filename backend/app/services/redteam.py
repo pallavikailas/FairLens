@@ -606,7 +606,7 @@ class FairnessRedTeamAgent:
         if is_generative:
             return {"name": "prompt_fairness_constraint", "rationale": "Generative LLM — add explicit fairness instructions to the decision prompt"}
         if not is_trainable:
-            if disparity > 0.2 or bias_source == "cartography":
+            if disparity > 0.2 or bias_source in ("cartography", "user_confirmed"):
                 return {"name": "demographic_parity_correction", "rationale": "External model with high disparity — compute post-hoc per-group correction factors from cartography to equalise positive rates"}
             return {"name": "threshold_adjustment", "rationale": "External model — per-group thresholds equalise prediction rates"}
         if disparity > 0.3:
