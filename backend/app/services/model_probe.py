@@ -95,6 +95,45 @@ class ModelBiasProbe:
             logger.error(f"[{audit_id}] Model prediction on reference dataset failed: {e}")
             raise ValueError(f"Model could not be probed on reference dataset: {e}")
 
+        # ── Degenerate prediction guard ───────────────────────────────────────
+        # If the model predicts >97% the same class, the synthetic probe data is
+        # out-of-distribution and any bias numbers would be statistically meaningless.
+        n_pos = sum(model_predictions)
+        n_tot = len(model_predictions)
+        pos_rate = n_pos / n_tot if n_tot else 0.5
+        if pos_rate <= 0.03 or pos_rate >= 0.97:
+            majority_class = 1 if pos_rate > 0.5 else 0
+            logger.warning(
+                f"[{audit_id}] Degenerate probe: {pos_rate:.1%} of predictions = class {majority_class}. "
+                "Synthetic reference data is likely out-of-distribution."
+            )
+            return {
+                "audit_id":               audit_id,
+                "analysis_type":          "model_probe",
+                "degenerate":             True,
+                "degenerate_message": (
+                    f"Model predicted class {majority_class} for {pos_rate:.0%} of the synthetic reference "
+                    f"dataset ({n_tot} rows). This means the probe data does not match the model's training "
+                    "distribution — any bias numbers computed from it would be statistically meaningless. "
+                    "To properly probe this model, upload a representative dataset so Phase 3 (Cross-Analysis) "
+                    "can measure bias on real data."
+                ),
+                "reference_dataset_size":  n_tot,
+                "reference_protected_cols": probe_protected,
+                "reference_target_col":    probe_target,
+                "cartography":             {},
+                "constitution":            {},
+                "model_biases":            [],
+                "summary": {
+                    "fair_score":             None,
+                    "bias_count":             0,
+                    "most_biased_attribute":  None,
+                    "analysis_source":        "embedded_reference_dataset",
+                    "model_type":             model_type,
+                    "degenerate":             True,
+                },
+            }
+
         # ── 3. Bias Cartography on reference data + model predictions ────────
         carto_results = await cartography_service.run_cartography(
             dataset_csv=ref_csv,

@@ -124,13 +124,14 @@ export default function AuditPage() {
   const scheduleSubStages = (stages: { name: string; delay: number }[]) => {
     subStageTimers.current.forEach(clearTimeout)
     subStageTimers.current = stages.map(({ name, delay }) =>
-      setTimeout(() => setSubStage(name), delay)
+      setTimeout(() => { setSubStage(name); store.setActiveSubStage(name) }, delay)
     )
   }
   const clearSubStages = () => {
     subStageTimers.current.forEach(clearTimeout)
     subStageTimers.current = []
     setSubStage(null)
+    store.setActiveSubStage(null)
   }
 
   const PHASE_SUB_STAGES: Record<string, string[]> = {
@@ -491,22 +492,58 @@ export default function AuditPage() {
       {/* Loading */}
       <AnimatePresence>
         {store.loading && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="glass rounded-2xl p-5 border border-lens/20 mb-6">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-2 h-2 rounded-full bg-lens animate-pulse" />
-              <span className="text-lens-light font-mono text-sm">
-                {activePhase === 'model_probe'    && 'Phase 1 — Probing model on reference dataset...'}
-                {activePhase === 'dataset_probe'  && 'Phase 2 — Analyzing dataset for structural biases...'}
-                {activePhase === 'cross_analysis' && 'Phase 3 — Cross-analyzing model × dataset interaction biases...'}
-                {!activePhase && 'Running analysis via Gemini 2.5 Flash...'}
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+            className="glass rounded-2xl border border-lens/20 mb-6 overflow-hidden">
+            {/* Header bar */}
+            <div className="flex items-center gap-3 px-5 py-3 border-b border-white/5 bg-lens/5">
+              <motion.div className="w-2 h-2 rounded-full bg-lens"
+                animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 1.2, repeat: Infinity }} />
+              <span className="text-lens-light font-mono text-sm font-semibold">
+                {activePhase === 'model_probe'    ? 'Phase 1 — Model Probe' :
+                 activePhase === 'dataset_probe'  ? 'Phase 2 — Dataset Analysis' :
+                 activePhase === 'cross_analysis' ? 'Phase 3 — Cross-Analysis' :
+                 'Initialising…'}
               </span>
+              {subStage && (
+                <span className="ml-auto text-xs font-mono px-2.5 py-1 rounded-lg bg-lens/20 text-lens-light border border-lens/30">
+                  ▶ {subStage}
+                </span>
+              )}
             </div>
-            <div className="w-full bg-white/5 rounded-full h-1.5">
-              <motion.div className="h-1.5 rounded-full bg-gradient-to-r from-lens to-lens-light"
-                animate={{ width: `${progress}%` }} transition={{ duration: 0.5 }} />
+
+            {/* Per-phase sub-stage track */}
+            {activePhase && PHASE_SUB_STAGES[activePhase] && (
+              <div className="flex gap-0 border-b border-white/5">
+                {PHASE_SUB_STAGES[activePhase].map((sub, i, arr) => {
+                  const isActive = subStage === sub
+                  const isDone   = arr.indexOf(subStage ?? '') > i
+                  return (
+                    <div key={sub} className={`flex-1 flex items-center gap-2 px-4 py-2.5 transition-all
+                      ${isActive ? 'bg-lens/10' : isDone ? 'bg-signal-green/5' : 'bg-transparent'}`}>
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0
+                        ${isActive ? 'bg-lens/30 border border-lens/50' : isDone ? 'bg-signal-green/20 border border-signal-green/30' : 'border border-white/10'}`}>
+                        {isDone ? <span className="text-signal-green text-xs">✓</span> :
+                         isActive ? <motion.span animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }} className="text-lens-light inline-block text-xs">⟳</motion.span> :
+                         <span className="text-white/20 text-xs">{i + 1}</span>}
+                      </div>
+                      <span className={`text-xs font-mono font-semibold
+                        ${isActive ? 'text-lens-light' : isDone ? 'text-signal-green' : 'text-white/25'}`}>
+                        {sub}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Progress bar */}
+            <div className="px-5 py-3">
+              <div className="w-full bg-white/5 rounded-full h-1">
+                <motion.div className="h-1 rounded-full bg-gradient-to-r from-lens to-lens-light"
+                  animate={{ width: `${progress}%` }} transition={{ duration: 0.6, ease: 'easeOut' }} />
+              </div>
+              <div className="text-white/25 text-xs font-mono mt-1.5">{progress}% complete</div>
             </div>
-            <div className="text-white/25 text-xs font-mono mt-2">{progress}% complete</div>
           </motion.div>
         )}
       </AnimatePresence>
