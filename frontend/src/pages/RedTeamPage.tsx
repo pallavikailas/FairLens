@@ -272,11 +272,36 @@ export default function RedTeamPage() {
           <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} className="mt-8">
             <h2 className="font-display font-bold text-white text-2xl mb-6">Red-Team Report</h2>
 
-            <div className="grid md:grid-cols-3 gap-4 mb-6">
+            {/* Success / warning banner */}
+            {improved.length > 0 ? (
+              <div className="mb-6 p-4 rounded-2xl bg-signal-green/10 border border-signal-green/30 flex items-start gap-3">
+                <span className="text-signal-green text-xl mt-0.5">✓</span>
+                <div>
+                  <div className="text-signal-green font-display font-semibold text-sm mb-0.5">
+                    {improved.length} bias{improved.length > 1 ? 'es' : ''} successfully remediated
+                  </div>
+                  <div className="text-white/50 text-xs font-mono">
+                    The agent applied mitigation patches and confirmed improvement across {improved.length} attribute{improved.length > 1 ? 's' : ''}.
+                    {(report.patches_failed?.length > 0) && ` ${report.patches_failed.length} attribute(s) could not be patched.`}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="mb-6 p-4 rounded-2xl bg-white/5 border border-white/10 flex items-start gap-3">
+                <span className="text-white/30 text-xl mt-0.5">◈</span>
+                <div className="text-white/50 text-xs font-mono">
+                  Patches were applied but no measurable improvement was detected, or corrections are applied at inference time via the correction factors below.
+                </div>
+              </div>
+            )}
+
+            {/* Summary cards */}
+            <div className="grid md:grid-cols-4 gap-4 mb-6">
               {[
                 { label: 'Iterations', value: report.iterations || 1, color: 'text-white' },
                 { label: 'Patches Applied', value: patchesApplied, color: 'text-signal-green' },
                 { label: 'Biases Improved', value: improved.length, color: 'text-signal-green' },
+                { label: 'Patches Failed', value: report.patches_failed?.length ?? 0, color: report.patches_failed?.length > 0 ? 'text-signal-red' : 'text-white/30' },
               ].map((card, i) => (
                 <div key={i} className="glass rounded-2xl p-5 border border-white/5">
                   <div className="text-white/30 text-xs font-mono mb-2">{card.label}</div>
@@ -285,39 +310,134 @@ export default function RedTeamPage() {
               ))}
             </div>
 
+            {/* Mitigation plan table */}
+            {report.mitigation_plan?.length > 0 && (
+              <div className="glass rounded-2xl p-5 border border-white/5 mb-6">
+                <div className="text-xs font-mono text-white/30 uppercase tracking-wider mb-4">Mitigation Plan</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs font-mono">
+                    <thead>
+                      <tr className="border-b border-white/5">
+                        <th className="text-left text-white/30 pb-3 pr-4 font-normal">Attribute</th>
+                        <th className="text-left text-white/30 pb-3 pr-4 font-normal">Strategy</th>
+                        <th className="text-left text-white/30 pb-3 pr-4 font-normal">Disparity (SPD)</th>
+                        <th className="text-left text-white/30 pb-3 pr-4 font-normal">Source</th>
+                        <th className="text-left text-white/30 pb-3 font-normal">Rationale</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {report.mitigation_plan.map((item: any, i: number) => (
+                        <tr key={i} className="border-b border-white/3 last:border-0">
+                          <td className="py-3 pr-4 text-signal-red font-semibold">{item.attribute}</td>
+                          <td className="py-3 pr-4">
+                            <span className="px-2 py-0.5 rounded bg-lens/10 border border-lens/20 text-lens-light">
+                              {item.strategy?.replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-4 text-white/70">
+                            {item.disparity != null ? item.disparity.toFixed(4) : '—'}
+                          </td>
+                          <td className="py-3 pr-4 text-white/40">{item.bias_source ?? '—'}</td>
+                          <td className="py-3 text-white/60 max-w-xs">{item.rationale}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Per-attribute before/after */}
+            {(fairnessDelta.per_attribute?.length > 0 || improved.length > 0 || validation.unchanged?.length > 0 || validation.regressed?.length > 0) && (
+              <div className="glass rounded-2xl p-5 border border-white/5 mb-6">
+                <div className="text-xs font-mono text-white/30 uppercase tracking-wider mb-4">Per-Attribute Bias Change</div>
+                {fairnessDelta.before_avg_spd != null && (
+                  <div className="grid md:grid-cols-3 gap-4 mb-5 pb-5 border-b border-white/5">
+                    <div>
+                      <div className="text-white/30 text-xs font-mono mb-1">Avg SPD Before</div>
+                      <div className="text-white font-display text-2xl">{fairnessDelta.before_avg_spd.toFixed(3)}</div>
+                    </div>
+                    <div>
+                      <div className="text-white/30 text-xs font-mono mb-1">Avg SPD After</div>
+                      <div className="text-signal-green font-display text-2xl">{fairnessDelta.after_avg_spd?.toFixed(3) ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-white/30 text-xs font-mono mb-1">Improvement</div>
+                      <div className="text-lens-light font-display text-2xl">
+                        {fairnessDelta.improvement != null ? `+${fairnessDelta.improvement.toFixed(3)}` : '—'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="space-y-2">
+                  {(fairnessDelta.per_attribute || [
+                    ...improved.map((a: any) => ({ attribute: a.attribute, before: a.before, after: a.after, status: 'improved' })),
+                    ...(validation.regressed || []).map((a: any) => ({ attribute: a.attribute, before: a.before, after: a.after, status: 'regressed' })),
+                    ...(validation.unchanged || []).map((a: any) => ({ attribute: a.attribute, before: a.before, after: a.after, status: 'unchanged' })),
+                  ]).map((item: any, i: number) => {
+                    const before = item.before ?? 0
+                    const after = item.after ?? before
+                    const delta = before - after
+                    const status = item.status || (delta > 0.001 ? 'improved' : delta < -0.001 ? 'regressed' : 'unchanged')
+                    const statusColor = status === 'improved' ? '#10b981' : status === 'regressed' ? '#ef4444' : '#ffffff40'
+                    const barMax = Math.max(before, after, 0.01)
+                    return (
+                      <div key={i} className="flex items-center gap-4 py-2 border-b border-white/3 last:border-0">
+                        <div className="w-28 flex-shrink-0 text-xs font-mono text-white/70">{item.attribute}</div>
+                        <div className="flex-1 flex items-center gap-2">
+                          <div className="flex-1 relative h-2 rounded bg-white/5">
+                            <div className="absolute left-0 top-0 h-full rounded bg-white/20" style={{ width: `${(before / barMax) * 100}%` }} />
+                          </div>
+                          <span className="text-white/30 text-xs font-mono w-10 text-right">{before.toFixed(3)}</span>
+                        </div>
+                        <div className="text-white/20 text-xs">→</div>
+                        <div className="flex-1 flex items-center gap-2">
+                          <div className="flex-1 relative h-2 rounded bg-white/5">
+                            <div className="absolute left-0 top-0 h-full rounded" style={{ width: `${(after / barMax) * 100}%`, background: statusColor }} />
+                          </div>
+                          <span className="text-xs font-mono w-10 text-right" style={{ color: statusColor }}>{after.toFixed(3)}</span>
+                        </div>
+                        <div className="w-20 flex-shrink-0 text-right">
+                          <span className="text-xs font-mono px-2 py-0.5 rounded" style={{ background: statusColor + '20', color: statusColor }}>
+                            {status === 'improved' ? `−${delta.toFixed(3)}` : status === 'regressed' ? `+${Math.abs(delta).toFixed(3)}` : 'unchanged'}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Use the improved model */}
             <div className="glass rounded-2xl p-5 border border-white/5 mb-6">
-              <div className="text-xs font-mono text-white/30 uppercase tracking-wider mb-3">Remediation Outcome</div>
-              {fairnessDelta.before_avg_spd != null ? (
-                <div className="grid md:grid-cols-3 gap-4">
-                  <div>
-                    <div className="text-white/30 text-xs font-mono mb-1">Avg Bias Before</div>
-                    <div className="text-white font-display text-2xl">{fairnessDelta.before_avg_spd.toFixed(3)}</div>
-                  </div>
-                  <div>
-                    <div className="text-white/30 text-xs font-mono mb-1">Avg Bias After</div>
-                    <div className="text-signal-green font-display text-2xl">{fairnessDelta.after_avg_spd.toFixed(3)}</div>
-                  </div>
-                  <div>
-                    <div className="text-white/30 text-xs font-mono mb-1">Improvement</div>
-                    <div className="text-lens-light font-display text-2xl">+{fairnessDelta.improvement.toFixed(3)}</div>
+              <div className="text-xs font-mono text-white/30 uppercase tracking-wider mb-3">Use the Improved Model</div>
+              <p className="text-white/60 text-sm mb-4">
+                {modelArtifact?.message || 'No patched model artifact was generated for this run.'}
+              </p>
+              {modelArtifact?.available && (
+                <div className="space-y-4">
+                  <button onClick={downloadPatchedModel}
+                    className="px-5 py-2.5 rounded-xl bg-signal-green hover:bg-signal-green/90 text-white font-display font-semibold text-sm transition-all">
+                    ↓ Download Remediated Model (.pkl)
+                  </button>
+                  <div className="text-xs font-mono text-white/30 space-y-1 mt-2">
+                    <div className="text-white/50 mb-1">How to use:</div>
+                    <div>1. Load the .pkl file with <span className="text-lens-light">joblib.load()</span> or <span className="text-lens-light">pickle.load()</span></div>
+                    <div>2. The model includes per-group correction factors applied at prediction time</div>
+                    <div>3. Use <span className="text-lens-light">model.predict(X)</span> as normal — fairness corrections are automatic</div>
+                    <div>4. Re-run FairLens on the remediated model to verify compliance</div>
                   </div>
                 </div>
-              ) : (
-                <p className="text-white/50 text-sm">No directly measured post-patch disparity delta was available for this run.</p>
               )}
-
-              <div className="mt-4 pt-4 border-t border-white/5">
-                <div className="text-white/30 text-xs font-mono mb-2">Use The Improved Model</div>
-                <p className="text-white/70 text-sm mb-3">
-                  {modelArtifact?.message || 'No remediated model artifact is available for this run.'}
-                </p>
-                {modelArtifact?.available && (
-                  <button onClick={downloadPatchedModel}
-                    className="px-4 py-2 rounded-xl bg-signal-green hover:bg-signal-green/90 text-white font-display font-semibold text-sm transition-all">
-                    Download Remediated Model
-                  </button>
-                )}
-              </div>
+              {!modelArtifact?.available && report.mitigation_plan?.length > 0 && (
+                <div className="text-xs font-mono text-white/30 space-y-1">
+                  <div className="text-white/50 mb-1">Correction factors applied at inference time:</div>
+                  {(report.mitigation_plan || []).map((item: any, i: number) => (
+                    <div key={i}>• <span className="text-lens-light">{item.attribute}</span>: {item.strategy?.replace(/_/g, ' ')}</div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-4">
