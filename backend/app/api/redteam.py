@@ -1,5 +1,5 @@
 """API routes for Fairness Red-Team Agent — streams progress via SSE."""
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import Optional
 import pandas as pd
@@ -15,6 +15,7 @@ router = APIRouter()
 
 @router.post("/run")
 async def run_redteam(
+    request: Request,
     model_file: Optional[UploadFile] = File(default=None),
     dataset_file: Optional[UploadFile] = File(default=None),
     protected_cols: str = Form(...),
@@ -170,8 +171,13 @@ async def run_redteam(
     async def event_stream():
         try:
             async for event in redteam_agent.run(model, X, y, audit, biases, audit_id):
+                if await request.is_disconnected():
+                    logger.info(f"[{audit_id}] Client disconnected — stopping red-team stream")
+                    return
                 yield f"data: {_safe_json(event)}\n\n"
                 await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            logger.info(f"[{audit_id}] Red-team stream cancelled by client")
         except Exception as e:
             import traceback
             err_msg = traceback.format_exc()

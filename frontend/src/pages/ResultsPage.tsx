@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as d3 from 'd3'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useAuditStore } from '../hooks/useAuditStore'
 import { exportPdfReport } from '../utils/api'
 
@@ -61,17 +62,41 @@ function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
     const colorOf    = (d: any) => attrColor((d.attribute || '').split('+')[0].trim(), attrIdx[(d.attribute || '').split('+')[0].trim()] ?? 0)
 
     // ── Background quadrant shading ───────────────────────────────────────
-    g.append('rect').attr('x', 0).attr('y', 0).attr('width', xScale(0)).attr('height', h)
-      .attr('fill', 'rgba(239,68,68,0.04)')
-    g.append('rect').attr('x', xScale(0)).attr('y', 0).attr('width', w - xScale(0)).attr('height', h)
-      .attr('fill', 'rgba(34,197,94,0.04)')
+    const threshold = 0.1
+    const tx = xScale(threshold)
+    const txNeg = xScale(-threshold)
+    // Safe zone (between thresholds)
+    g.append('rect').attr('x', txNeg).attr('y', 0).attr('width', tx - txNeg).attr('height', h)
+      .attr('fill', 'rgba(34,197,94,0.05)')
+    // Disadvantaged zone (left of -threshold)
+    g.append('rect').attr('x', 0).attr('y', 0).attr('width', txNeg).attr('height', h)
+      .attr('fill', 'rgba(239,68,68,0.07)')
+    // Advantaged zone (right of +threshold)
+    g.append('rect').attr('x', tx).attr('y', 0).attr('width', w - tx).attr('height', h)
+      .attr('fill', 'rgba(234,179,8,0.05)')
+
+    // ── SPD threshold lines at ±0.10 ─────────────────────────────────────
+    if (txNeg > 0 && txNeg < w) {
+      g.append('line').attr('x1', txNeg).attr('x2', txNeg).attr('y1', 0).attr('y2', h)
+        .attr('stroke', 'rgba(239,68,68,0.5)').attr('stroke-dasharray', '4 3').attr('stroke-width', 1)
+      g.append('text').attr('x', txNeg - 3).attr('y', 10).attr('text-anchor', 'end')
+        .attr('fill', 'rgba(239,68,68,0.5)').attr('font-size', 7).attr('font-family', 'JetBrains Mono, monospace')
+        .text('−10% threshold')
+    }
+    if (tx > 0 && tx < w) {
+      g.append('line').attr('x1', tx).attr('x2', tx).attr('y1', 0).attr('y2', h)
+        .attr('stroke', 'rgba(234,179,8,0.5)').attr('stroke-dasharray', '4 3').attr('stroke-width', 1)
+      g.append('text').attr('x', tx + 3).attr('y', 10).attr('text-anchor', 'start')
+        .attr('fill', 'rgba(234,179,8,0.5)').attr('font-size', 7).attr('font-family', 'JetBrains Mono, monospace')
+        .text('+10% threshold')
+    }
 
     // ── Reference lines ───────────────────────────────────────────────────
     // Vertical: x=0 = no disparity
     g.append('line').attr('x1', xScale(0)).attr('x2', xScale(0)).attr('y1', 0).attr('y2', h)
-      .attr('stroke', 'rgba(255,255,255,0.2)').attr('stroke-dasharray', '5 3')
+      .attr('stroke', 'rgba(255,255,255,0.3)').attr('stroke-dasharray', '5 3')
     g.append('text').attr('x', xScale(0)).attr('y', -8).attr('text-anchor', 'middle')
-      .attr('fill', 'rgba(255,255,255,0.25)').attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace')
+      .attr('fill', 'rgba(255,255,255,0.35)').attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace')
       .text('no bias')
 
     // Horizontal: overall positive rate
@@ -157,12 +182,12 @@ function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
       .join('circle').attr('class', 'pt')
       .attr('cx', (d: any) => xScale(d.x))
       .attr('cy', (d: any) => yScale(d.y))
-      .attr('r',  (d: any) => rScale(d.size || 1))
+      .attr('r',  (d: any) => Math.max(5, rScale(d.size || 1)))
       .attr('fill',         (d: any) => colorOf(d))
-      .attr('fill-opacity', (d: any) => d.flagged ? 0.8 : 0.35)
-      .attr('stroke',       (d: any) => colorOf(d))
-      .attr('stroke-width', (d: any) => d.flagged ? 2 : 0.8)
-      .attr('stroke-opacity', 0.9)
+      .attr('fill-opacity', (d: any) => d.flagged ? 0.9 : 0.45)
+      .attr('stroke',       (d: any) => d.flagged ? '#ffffff' : colorOf(d))
+      .attr('stroke-width', (d: any) => d.flagged ? 2.5 : 1)
+      .attr('stroke-opacity', (d: any) => d.flagged ? 0.7 : 0.9)
       .on('mouseover', function(event: MouseEvent, d: any) {
         d3.select(this).attr('fill-opacity', 1).attr('r', rScale(d.size || 1) + 3)
         const diStr  = d.disparate_impact != null ? `DI: ${d.disparate_impact.toFixed(3)}<br/>` : ''
@@ -630,12 +655,15 @@ export default function ResultsPage() {
     return Object.values(byId)
   })()
 
-  // Adjust FairScore to account for proxy chain risk (cartography score only sees model outputs)
+  // Adjust FairScore: proxy chain risk + compliance failures
   const adjustedFairScore = (() => {
     if (!carto?.fair_score) return null
     let score = carto.fair_score.score
     score -= (proxy?.summary?.critical_proxies ?? 0) * 10
     score -= (proxy?.summary?.high_proxies ?? 0) * 5
+    // Each failed regulation costs 4 points (max 8 regs × 4 = 32)
+    const failCount = mergedComplianceTags.filter((t: any) => t.status === 'FAIL').length
+    score -= failCount * 4
     score = Math.max(0, Math.min(100, score))
     const label = score >= 80 ? 'Fair' : score >= 60 ? 'Caution' : 'Biased'
     const color = score >= 80 ? 'green' : score >= 60 ? 'yellow' : 'red'
@@ -692,7 +720,7 @@ export default function ResultsPage() {
               {[
                 { label: 'Samples Analysed', value: carto?.summary?.total_samples?.toLocaleString(), color: 'text-white' },
                 { label: 'Bias Hotspots', value: carto?.summary?.hotspot_count, color: 'text-signal-red' },
-                { label: 'Decision Flips', value: constitution?.summary?.decision_flips, color: 'text-signal-amber' },
+                { label: 'Decision Flips', value: (modelProbe?.constitution?.summary?.decision_flips ?? 0) + (constitution?.summary?.decision_flips ?? 0) || '—', color: 'text-signal-amber' },
                 { label: 'High-Risk Proxies', value: highRiskProxies || proxy?.summary?.critical_proxies, color: 'text-lens-light' },
               ].map((card, i) => (
                 <div key={i} className="glass rounded-2xl p-4 border border-white/5">
@@ -711,7 +739,7 @@ export default function ResultsPage() {
         {[
           { label: 'Samples Analysed', value: carto?.summary?.total_samples?.toLocaleString(), color: 'text-white' },
           { label: 'Bias Hotspots', value: carto?.summary?.hotspot_count, color: 'text-signal-red' },
-          { label: 'Decision Flips', value: constitution?.summary?.decision_flips, color: 'text-signal-amber' },
+          { label: 'Decision Flips', value: (modelProbe?.constitution?.summary?.decision_flips ?? 0) + (constitution?.summary?.decision_flips ?? 0) || '—', color: 'text-signal-amber' },
           { label: 'High-Risk Proxies', value: highRiskProxies || proxy?.summary?.critical_proxies, color: 'text-lens-light' },
         ].map((card, i) => (
           <div key={i} className="glass rounded-2xl p-4 border border-white/5">
@@ -805,6 +833,55 @@ export default function ResultsPage() {
                       {modelProbeBiases.length === 0 && <div className="text-white/20 text-sm font-mono text-center py-4">No hidden biases detected in model probe</div>}
                     </div>
                   </div>
+                  {/* Attribute probability sensitivity — shows ALL protected attrs including zero-flip */}
+                  {(() => {
+                    const patterns: any[] = modelProbe.constitution?.patterns ?? []
+                    const allCols: string[] = modelProbe.reference_protected_cols ?? []
+                    // Build map from patterns; attrs missing from patterns = zero sensitivity
+                    const patternMap: Record<string, any> = {}
+                    for (const p of patterns) patternMap[p.attribute] = p
+                    const rows = allCols.map(attr => patternMap[attr] ?? {
+                      attribute: attr, flip_rate: 0, avg_probability_shift: 0, severity: 'low'
+                    })
+                    if (!rows.length) return null
+                    return (
+                      <div className="glass rounded-2xl p-5 border border-white/5">
+                        <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-1">Probability Sensitivity by Protected Attribute</div>
+                        <p className="text-white/30 text-xs font-mono mb-3">
+                          How much does changing only this demographic attribute shift the model's output probability?
+                          Zero flip rate = model is insensitive to that attribute on the reference probe.
+                        </p>
+                        <div className="space-y-2">
+                          {rows.map((p: any, i: number) => {
+                            const fr = p.flip_rate ?? 0
+                            const shift = p.avg_probability_shift ?? 0
+                            const hasSignal = fr > 0.01
+                            const barColor = fr > 0.15 ? '#ef4444' : fr > 0.05 ? '#eab308' : '#22c55e'
+                            return (
+                              <div key={i} className={`flex items-center gap-3 p-3 rounded-xl border ${hasSignal ? 'border-white/10 bg-white/3' : 'border-white/3 bg-white/1'}`}>
+                                <div className="w-32 flex-shrink-0 text-xs font-mono font-semibold text-white/70">{p.attribute}</div>
+                                <div className="flex-1 relative h-1.5 rounded bg-white/5">
+                                  <div className="absolute left-0 top-0 h-full rounded" style={{ width: `${Math.min(fr * 300, 100)}%`, background: barColor }} />
+                                </div>
+                                <div className="w-20 text-right text-xs font-mono" style={{ color: hasSignal ? barColor : '#ffffff22' }}>
+                                  {hasSignal ? `${(fr * 100).toFixed(1)}% flips` : 'no change'}
+                                </div>
+                                <div className="w-16 text-right text-xs font-mono text-white/25">
+                                  {shift > 0 ? `±${(shift * 100).toFixed(1)}%` : '—'}
+                                </div>
+                                <div className="w-20 text-right">
+                                  {hasSignal
+                                    ? <SeverityBadge level={p.severity ?? 'low'} />
+                                    : <span className="text-xs font-mono text-white/20 px-2 py-0.5 rounded bg-white/3">stable</span>}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })()}
+
                   {modelProbe.cartography?.gemini_analysis?.headline && (
                     <div className="glass rounded-2xl p-5 border border-lens/15">
                       <div className="text-xs font-mono text-lens-light mb-2">Gemini Analysis - Model Probe</div>
@@ -980,19 +1057,81 @@ export default function ResultsPage() {
           )}
 
           {activeTab === 'constitution' && constitution && (
-            <div className="glass rounded-2xl p-6 border border-white/5">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-8 h-8 rounded-xl bg-lens/20 border border-lens/30 flex items-center justify-center text-sm">◍</div>
-                <div>
+            <div className="space-y-4">
+              {/* Summary header */}
+              <div className="glass rounded-2xl p-5 border border-lens/15 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-xl bg-lens/20 border border-lens/30 flex items-center justify-center text-base flex-shrink-0">◍</div>
+                <div className="flex-1 min-w-0">
                   <h3 className="font-display font-semibold text-white text-sm">Counterfactual Constitution</h3>
-                  <div className="text-white/30 text-xs font-mono">
-                    Flip rate: {(constitution.summary?.flip_rate * 100).toFixed(1)}% · Most sensitive: {constitution.summary?.most_sensitive_attribute}
+                  <div className="text-white/30 text-xs font-mono mt-0.5">
+                    Flip rate: <span className="text-signal-amber">{((constitution.summary?.flip_rate ?? 0) * 100).toFixed(1)}%</span>
+                    {' · '}Most sensitive: <span className="text-lens-light">{constitution.summary?.most_sensitive_attribute ?? '—'}</span>
+                    {' · '}{constitution.summary?.decision_flips ?? 0} decision flips out of {constitution.summary?.total_cf_pairs ?? 0} pairs
                   </div>
                 </div>
+                <div className="flex gap-4 flex-shrink-0">
+                  {[
+                    { label: 'Flip Rate', value: `${((constitution.summary?.flip_rate ?? 0) * 100).toFixed(1)}%`, color: (constitution.summary?.flip_rate ?? 0) > 0.15 ? 'text-signal-red' : (constitution.summary?.flip_rate ?? 0) > 0.05 ? 'text-signal-amber' : 'text-green-400' },
+                    { label: 'Decision Flips', value: constitution.summary?.decision_flips ?? 0, color: 'text-white' },
+                  ].map((s, i) => (
+                    <div key={i} className="text-center">
+                      <div className={`font-display font-bold text-xl ${s.color}`}>{s.value}</div>
+                      <div className="text-white/30 text-xs font-mono">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="prose prose-invert prose-sm max-w-none text-white/70 prose-headings:font-display prose-headings:text-white prose-headings:font-semibold prose-code:font-mono prose-code:text-lens-light">
-                <ReactMarkdown>{constitution.constitution_markdown || '_No constitution generated._'}</ReactMarkdown>
-              </div>
+
+              {/* Per-attribute patterns */}
+              {constitution.patterns?.length > 0 && (
+                <div className="glass rounded-2xl p-5 border border-white/5">
+                  <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Demographic Sensitivity Index</div>
+                  <div className="space-y-2">
+                    {constitution.patterns.map((p: any, i: number) => {
+                      const fr = p.flip_rate ?? 0
+                      const sevColor = fr > 0.3 ? '#ef4444' : fr > 0.15 ? '#f97316' : fr > 0.05 ? '#eab308' : '#22c55e'
+                      const barPct = Math.min(fr * 100 * 3, 100)
+                      return (
+                        <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-white/2 border border-white/5">
+                          <div className="w-24 flex-shrink-0 text-xs font-mono text-white/70 font-semibold">{p.attribute}</div>
+                          <div className="flex-1 relative h-2 rounded bg-white/5">
+                            <div className="absolute left-0 top-0 h-full rounded transition-all" style={{ width: `${barPct}%`, background: sevColor }} />
+                          </div>
+                          <div className="w-16 text-right text-xs font-mono" style={{ color: sevColor }}>{(fr * 100).toFixed(1)}% flips</div>
+                          <div className="w-12 text-right text-xs font-mono text-white/30">±{((p.avg_probability_shift ?? 0) * 100).toFixed(1)}%</div>
+                          <SeverityBadge level={p.severity ?? 'low'} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Sections rendered from parsed constitution */}
+              {(constitution.sections?.length > 0 ? constitution.sections : []).map((sec: any, i: number) => (
+                <div key={i} className="glass rounded-2xl border border-white/5 overflow-hidden">
+                  <div className="px-5 py-3 border-b border-white/5 bg-white/2">
+                    <h4 className="font-display font-semibold text-white text-sm">{sec.title}</h4>
+                  </div>
+                  <div className="px-5 py-4 prose prose-invert prose-sm max-w-none
+                    text-white/70 leading-relaxed
+                    prose-headings:text-white prose-headings:font-display prose-headings:font-semibold prose-headings:text-sm
+                    prose-strong:text-white prose-strong:font-semibold
+                    prose-code:font-mono prose-code:text-lens-light prose-code:bg-white/5 prose-code:px-1 prose-code:rounded
+                    prose-blockquote:border-l-lens prose-blockquote:border-l-2 prose-blockquote:pl-4 prose-blockquote:text-white/60 prose-blockquote:not-italic
+                    prose-table:text-xs prose-th:text-white/60 prose-th:font-mono prose-th:font-normal prose-td:text-white/50
+                    prose-a:text-lens-light prose-li:text-white/65">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{sec.content || ''}</ReactMarkdown>
+                  </div>
+                </div>
+              ))}
+
+              {/* Fallback if no sections parsed */}
+              {(!constitution.sections?.length) && constitution.constitution_markdown && (
+                <div className="glass rounded-2xl p-5 border border-white/5 prose prose-invert prose-sm max-w-none text-white/70 prose-strong:text-white prose-code:text-lens-light">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{constitution.constitution_markdown}</ReactMarkdown>
+                </div>
+              )}
             </div>
           )}
 
