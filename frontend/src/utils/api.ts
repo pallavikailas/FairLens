@@ -148,13 +148,27 @@ export function streamRedTeam(
       }
       const reader = res.body!.getReader()
       const dec    = new TextDecoder()
+      // Buffer across chunks — SSE events can be split across multiple read() calls
+      let buffer = ''
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        for (const line of dec.decode(value).split('\n')) {
-          if (line.startsWith('data: ')) {
-            try { onEvent(JSON.parse(line.slice(6))) } catch {}
+        buffer += dec.decode(value, { stream: true })
+        // SSE events are delimited by double newline
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() ?? ''   // last part may be incomplete — keep buffering
+        for (const part of parts) {
+          for (const line of part.split('\n')) {
+            if (line.startsWith('data: ')) {
+              try { onEvent(JSON.parse(line.slice(6))) } catch {}
+            }
           }
+        }
+      }
+      // Flush any remaining buffer after stream ends
+      for (const line of buffer.split('\n')) {
+        if (line.startsWith('data: ')) {
+          try { onEvent(JSON.parse(line.slice(6))) } catch {}
         }
       }
     }).catch(() => {})
