@@ -859,6 +859,21 @@ export default function ResultsPage() {
                       {modelProbeBiases.length === 0 && <div className="text-white/20 text-sm font-mono text-center py-4">No hidden biases detected in model probe</div>}
                     </div>
                   </div>
+                  {/* Reference probe bias map — shows which demographic slices are affected */}
+                  {(modelProbe.cartography?.map_points?.length > 0) && (
+                    <div className="glass rounded-2xl p-5 border border-white/5">
+                      <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-1">Reference Probe — Demographic Bias Map</div>
+                      <p className="text-white/25 text-xs font-mono mb-4">
+                        Model probed on 300-row neutral reference dataset. Each point = one demographic group.
+                        Left of center = group is disadvantaged. Dashed rings = flagged hotspots.
+                      </p>
+                      <BiasMap
+                        points={modelProbe.cartography.map_points}
+                        hotspots={modelProbe.cartography.hotspots ?? []}
+                      />
+                    </div>
+                  )}
+
                   {/* Attribute probability sensitivity — shows ALL protected attrs including zero-flip */}
                   {(() => {
                     const patterns: any[] = modelProbe.constitution?.patterns ?? []

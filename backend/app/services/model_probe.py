@@ -61,6 +61,7 @@ class ModelBiasProbe:
         logger.info(f"[{audit_id}] Starting model bias probe with embedded reference dataset")
 
         # ── 1. Build probe dataset ────────────────────────────────────────────
+        model_predict_cols = None
         if _uses_text_reference_probe(model):
             ref_df, ref_csv = generate_text_reference_dataset()
             probe_protected = REFERENCE_PROTECTED_COLS
@@ -104,6 +105,26 @@ class ModelBiasProbe:
         except Exception as e:
             logger.error(f"[{audit_id}] Model prediction on reference dataset failed: {e}")
             raise ValueError(f"Model could not be probed on reference dataset: {e}")
+
+        # When a structured pkl model produces near-constant output on the generic probe
+        # (because the random 0-100 feature ranges don't match its training distribution),
+        # try calibrated feature ranges before flagging as degenerate.
+        if model_predict_cols is not None and not _is_llm(model):
+            _pos_rate = sum(model_predictions) / len(model_predictions) if model_predictions else 0
+            if len(set(model_predictions)) <= 1 or _pos_rate <= 0.01 or _pos_rate >= 0.99:
+                logger.info(
+                    f"[{audit_id}] Near-constant predictions (pos_rate={_pos_rate:.3f}), "
+                    "attempting calibration with better feature ranges"
+                )
+                calibrated = self._calibrate_probe(
+                    model, model_predict_cols, probe_protected, ref_df, probe_target
+                )
+                if calibrated is not None:
+                    ref_df, ref_csv, _, model_predictions = calibrated
+                    logger.info(
+                        f"[{audit_id}] Calibration succeeded — "
+                        f"pos_rate={sum(model_predictions)/len(model_predictions):.3f}"
+                    )
 
         diagnostics = self._prediction_diagnostics(
             ref_df=ref_df,
