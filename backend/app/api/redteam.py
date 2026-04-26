@@ -1,10 +1,10 @@
 """API routes for Fairness Red-Team Agent — streams progress via SSE."""
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import Optional
 import pandas as pd
 import numpy as np
-import pickle, io, uuid, json, asyncio, logging
+import pickle, io, uuid, json, asyncio, logging, threading
 
 from app.services.dataset_loader import load_dataset_csv
 from app.api._utils import resolve_feature_cols
@@ -15,6 +15,7 @@ router = APIRouter()
 
 @router.post("/run")
 async def run_redteam(
+    request: Request,
     model_file: Optional[UploadFile] = File(default=None),
     dataset_file: Optional[UploadFile] = File(default=None),
     protected_cols: str = Form(...),
@@ -167,15 +168,26 @@ async def run_redteam(
             return str(o)
         return json.dumps(obj, default=default)
 
+    stop_event = threading.Event()
+
     async def event_stream():
+        gen = redteam_agent.run(model, X, y, audit, biases, audit_id, stop_event=stop_event)
         try:
-            async for event in redteam_agent.run(model, X, y, audit, biases, audit_id):
+            async for event in gen:
+                # Check disconnect on every event boundary — now works because graph runs in thread
+                if await request.is_disconnected():
+                    logger.info(f"[{audit_id}] Client disconnected — signalling agent to stop")
+                    stop_event.set()
+                    await gen.aclose()
+                    return
                 yield f"data: {_safe_json(event)}\n\n"
                 await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            stop_event.set()
+            logger.info(f"[{audit_id}] Red-team stream cancelled")
         except Exception as e:
             import traceback
-            err_msg = traceback.format_exc()
-            logger.error(f"[{audit_id}] Red-team agent error: {err_msg}")
+            logger.error(f"[{audit_id}] Red-team agent error: {traceback.format_exc()}")
             yield f"data: {json.dumps({'node': 'error', 'status': 'error', 'log': [f'Agent error: {e}']})}\n\n"
 
     return StreamingResponse(

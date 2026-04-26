@@ -15,8 +15,10 @@ Architecture:
     └── Validator Agent (confirms fix, flags regressions)
 """
 
+import asyncio
 import base64
 import pickle
+import threading
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional, AsyncGenerator
@@ -96,7 +98,11 @@ class FairnessRedTeamAgent:
         audit_results: Dict,
         confirmed_biases: List[Dict],
         audit_id: str,
+        stop_event: Optional[threading.Event] = None,
     ) -> AsyncGenerator[Dict, None]:
+        if stop_event is None:
+            stop_event = threading.Event()
+
         state = {
             "model":            model,
             "X_train":          X_train,
@@ -112,25 +118,82 @@ class FairnessRedTeamAgent:
             "status":     "running",
             "log":        [],
             "audit_id":   audit_id,
+            "_stop_event": stop_event,
         }
+
+        loop = asyncio.get_event_loop()
+        # Use object sentinel instead of None so queue.get() can distinguish "done" from error
+        _DONE = object()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _run_graph():
+            try:
+                for step_output in self.graph.stream(state):
+                    if stop_event.is_set():
+                        break
+                    loop.call_soon_threadsafe(queue.put_nowait, step_output)
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, e)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+
+        thread = threading.Thread(target=_run_graph, daemon=True)
+        thread.start()
 
         last_log_len = 0
         latest_state = state
-        for step_output in self.graph.stream(state):
-            node_name  = list(step_output.keys())[0]
-            node_state = step_output[node_name]
-            latest_state = node_state
-            full_log = node_state.get("log", [])
-            new_lines = full_log[last_log_len:]
-            last_log_len = len(full_log)
-            yield {
-                "node":      node_name,
-                "iteration": node_state.get("iteration", 0),
-                "log":       new_lines,
-                "status":    node_state.get("status", "running"),
-            }
+        try:
+            while True:
+                item = await queue.get()
+                if item is _DONE:
+                    break
+                if isinstance(item, Exception):
+                    logger.error(f"[{audit_id}] Graph execution error: {item}")
+                    latest_state = {**latest_state, "log": [*latest_state.get("log", []), f"[Error] {item}"]}
+                    break
+                node_name  = list(item.keys())[0]
+                node_state = item[node_name]
+                latest_state = node_state
+                full_log = node_state.get("log", [])
+                new_lines = full_log[last_log_len:]
+                last_log_len = len(full_log)
+                yield {
+                    "node":      node_name,
+                    "iteration": node_state.get("iteration", 0),
+                    "log":       new_lines,
+                    "status":    node_state.get("status", "running"),
+                }
+        except GeneratorExit:
+            stop_event.set()
+            return
 
-        safe_state = {k: v for k, v in latest_state.items() if k not in ("model", "X_train", "y_train")}
+        if stop_event.is_set():
+            yield {"node": "complete", "status": "stopped", "results": {}}
+            return
+
+        # Always emit the complete event so the frontend can render the report
+        safe_state = {k: v for k, v in latest_state.items() if k not in ("model", "X_train", "y_train", "_stop_event")}
+        if "final_report" not in safe_state:
+            validation    = safe_state.get("validation_results", {})
+            patch_results = safe_state.get("patch_results", {})
+            safe_state["final_report"] = {
+                "audit_id":        audit_id,
+                "completed_at":    datetime.utcnow().isoformat(),
+                "iterations":      safe_state.get("iteration", 0),
+                "biases_targeted": len(safe_state.get("confirmed_biases", [])),
+                "patches_applied": len(patch_results.get("applied", [])),
+                "patches_failed":  len(patch_results.get("failed", [])),
+                "biases_improved": len(validation.get("improved", [])),
+                "biases_regressed": len(validation.get("regressed", [])),
+                "biases_unchanged": len(validation.get("unchanged", [])),
+                "validation":       validation,
+                "mitigation_plan":  safe_state.get("mitigation_plan", []),
+                "patch_results":    patch_results,
+                "remediated_fairness": self._fairness_delta(validation),
+                "patched_model_artifact": self._serialise_model_artifact(state.get("model")),
+                "log_summary":     safe_state.get("log", [])[-15:],
+                "status":          "complete",
+            }
         yield {"node": "complete", "status": "done", "results": safe_state}
 
     # ── Nodes ─────────────────────────────────────────────────────────────────
@@ -430,6 +493,8 @@ class FairnessRedTeamAgent:
                     corrections: Dict[str, float] = {}
                     before_rates: Dict[str, float] = {}
                     overall_rate: Optional[float]  = None
+
+                    # Try cartography slice_metrics first
                     for m in slice_metrics:
                         if m.get("attribute") == attr and "+" not in (m.get("attribute") or ""):
                             if overall_rate is None:
@@ -439,6 +504,37 @@ class FairnessRedTeamAgent:
                             before_rates[val] = float(pos_rate)
                             if pos_rate > 0 and overall_rate and overall_rate > 0:
                                 corrections[val] = round(overall_rate / pos_rate, 4)
+
+                    # Fallback: compute directly from model predictions on X_train
+                    if not corrections and attr in X_train.columns:
+                        log.append(f"[Patcher Agent] No cartography slice data for '{attr}' — computing from model predictions on training data")
+                        try:
+                            if hasattr(model, "predict_proba"):
+                                raw_probs = model.predict_proba(X_train)[:, 1]
+                                group_rates_raw: Dict[str, float] = {}
+                                for val in X_train[attr].dropna().unique():
+                                    mask = X_train[attr] == val
+                                    if mask.sum() > 0:
+                                        group_rates_raw[str(val)] = float(raw_probs[mask.values].mean())
+                            else:
+                                y_pred_rt = self._safe_predict(model, X_train)
+                                group_rates_raw = {}
+                                for val in X_train[attr].dropna().unique():
+                                    mask = X_train[attr] == val
+                                    if mask.sum() > 0:
+                                        group_rates_raw[str(val)] = float((y_pred_rt[mask.values] == 1).mean())
+
+                            if group_rates_raw:
+                                overall_rate = float(np.mean(list(group_rates_raw.values())))
+                                before_rates = group_rates_raw
+                                if overall_rate > 0:
+                                    corrections = {
+                                        val: round(overall_rate / rate, 4)
+                                        for val, rate in group_rates_raw.items()
+                                        if rate > 0
+                                    }
+                        except Exception as e:
+                            log.append(f"[Patcher Agent] Could not compute corrections from predictions: {e}")
 
                     if corrections:
                         group_corrections        = state.get("group_corrections", {})
@@ -450,12 +546,23 @@ class FairnessRedTeamAgent:
                         state["group_corrections"] = group_corrections
                         log.append(
                             f"[Patcher Agent] Demographic parity correction for '{attr}': "
-                            f"target_rate={overall_rate:.3f}, factors={corrections}"
+                            f"target_rate={overall_rate:.3f}, factors computed for {len(corrections)} groups"
                         )
                         patch_results["applied"].append({"strategy": strategy, "attribute": attr, "correction_factors": corrections})
                     else:
-                        log.append(f"[Patcher Agent] No cartography slice data for '{attr}' — cannot compute correction factors")
-                        patch_results["failed"].append({"strategy": strategy, "attribute": attr, "error": "no cartography slice metrics"})
+                        log.append(f"[Patcher Agent] Could not compute correction factors for '{attr}' — falling back to threshold adjustment")
+                        # Fall back to threshold adjustment if we have predict_proba
+                        if hasattr(model, "predict_proba") and attr in X_train.columns:
+                            try:
+                                thresholds = self._compute_group_thresholds(model, X_train, y_train, attr)
+                                state["group_thresholds"] = thresholds
+                                log.append(f"[Patcher Agent] Threshold adjustment fallback for '{attr}': {thresholds}")
+                                patch_results["applied"].append({"strategy": "threshold_adjustment", "attribute": attr})
+                            except Exception as e:
+                                log.append(f"[Patcher Agent] Threshold adjustment also failed: {e}")
+                                patch_results["failed"].append({"strategy": strategy, "attribute": attr, "error": str(e)})
+                        else:
+                            patch_results["failed"].append({"strategy": strategy, "attribute": attr, "error": "no slice metrics and attribute not in training data"})
 
                 elif strategy == "feature_ablation":
                     if attr in X_train.columns:
@@ -484,6 +591,14 @@ class FairnessRedTeamAgent:
         y_train          = state["y_train"]
         log              = list(state.get("log", []))
         group_corrections = state.get("group_corrections", {})
+        patch_results_state = state.get("patch_results", {})
+
+        applied_attrs = {p["attribute"] for p in patch_results_state.get("applied", [])}
+        if not applied_attrs and not group_corrections:
+            log.append("[Validator Agent] No patches were applied — recording biases as unchanged")
+            for e in state.get("evaluation_results", []):
+                validation["unchanged"].append(e["attribute"])
+            return {**state, "validation_results": validation, "log": log}
 
         log.append("[Validator Agent] Re-evaluating bias metrics post-patch...")
 
