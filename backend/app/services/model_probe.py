@@ -61,6 +61,7 @@ class ModelBiasProbe:
         logger.info(f"[{audit_id}] Starting model bias probe with embedded reference dataset")
 
         # ── 1. Build probe dataset ────────────────────────────────────────────
+        model_predict_cols = None
         if _uses_text_reference_probe(model):
             ref_df, ref_csv = generate_text_reference_dataset()
             probe_protected = REFERENCE_PROTECTED_COLS
