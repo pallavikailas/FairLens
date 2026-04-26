@@ -11,7 +11,7 @@ const MODEL_TYPES = [
   { id: 'api',         icon: '🌐', label: 'REST API Endpoint',            desc: 'Any model behind an HTTP URL' },
   { id: 'huggingface', icon: '🤗', label: 'HuggingFace',                  desc: 'Any model from HF Hub — auto-detected' },
   { id: 'openai',      icon: '🔮', label: 'OpenAI (ChatGPT / GPT-4)',     desc: 'gpt-4o, gpt-4, gpt-3.5-turbo' },
-  { id: 'gemini_llm',  icon: '✦',  label: 'Gemini LLM',                  desc: 'gemini-2.0-flash, gemini-1.5-pro' },
+  { id: 'gemini_llm',  icon: '✦',  label: 'Gemini LLM',                  desc: 'gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash' },
   { id: 'vertex_ai',   icon: '☁',  label: 'Vertex AI Endpoint',           desc: 'Google Cloud deployed model' },
 ] as const
 
@@ -106,7 +106,7 @@ export default function AuditPage() {
   const [hfToken, setHfToken]           = useState('')
   const [openaiModel, setOpenaiModel]   = useState('gpt-4o')
   const [openaiKey, setOpenaiKey]       = useState('')
-  const [geminiModel, setGeminiModel]   = useState('gemini-2.0-flash')
+  const [geminiModel, setGeminiModel]   = useState('gemini-2.5-flash')
   const [geminiKey, setGeminiKey]       = useState('')
   const [vertexEndpoint, setVertexEndpoint] = useState('')
   const [gcpProject, setGcpProject]     = useState('')
@@ -442,7 +442,7 @@ export default function AuditPage() {
             {modelType === 'gemini_llm' && (
               <div className="space-y-3">
                 <input value={geminiModel} onChange={e => setGeminiModel(e.target.value)}
-                  placeholder="e.g. gemini-2.0-flash, gemini-1.5-pro"
+                  placeholder="e.g. gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash"
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-lens/50 font-mono" />
                 <input value={geminiKey} onChange={e => setGeminiKey(e.target.value)}
                   placeholder="Gemini API key (AIza...)"
