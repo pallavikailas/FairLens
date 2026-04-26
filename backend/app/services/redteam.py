@@ -15,8 +15,10 @@ Architecture:
     └── Validator Agent (confirms fix, flags regressions)
 """
 
+import asyncio
 import base64
 import pickle
+import threading
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional, AsyncGenerator
@@ -96,7 +98,11 @@ class FairnessRedTeamAgent:
         audit_results: Dict,
         confirmed_biases: List[Dict],
         audit_id: str,
+        stop_event: Optional[threading.Event] = None,
     ) -> AsyncGenerator[Dict, None]:
+        if stop_event is None:
+            stop_event = threading.Event()
+
         state = {
             "model":            model,
             "X_train":          X_train,
@@ -112,14 +118,41 @@ class FairnessRedTeamAgent:
             "status":     "running",
             "log":        [],
             "audit_id":   audit_id,
+            "_stop_event": stop_event,
         }
+
+        loop = asyncio.get_event_loop()
+        # Use object sentinel instead of None so queue.get() can distinguish "done" from error
+        _DONE = object()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _run_graph():
+            try:
+                for step_output in self.graph.stream(state):
+                    if stop_event.is_set():
+                        break
+                    loop.call_soon_threadsafe(queue.put_nowait, step_output)
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, e)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+
+        thread = threading.Thread(target=_run_graph, daemon=True)
+        thread.start()
 
         last_log_len = 0
         latest_state = state
         try:
-            for step_output in self.graph.stream(state):
-                node_name  = list(step_output.keys())[0]
-                node_state = step_output[node_name]
+            while True:
+                item = await queue.get()
+                if item is _DONE:
+                    break
+                if isinstance(item, Exception):
+                    logger.error(f"[{audit_id}] Graph execution error: {item}")
+                    latest_state = {**latest_state, "log": [*latest_state.get("log", []), f"[Error] {item}"]}
+                    break
+                node_name  = list(item.keys())[0]
+                node_state = item[node_name]
                 latest_state = node_state
                 full_log = node_state.get("log", [])
                 new_lines = full_log[last_log_len:]
@@ -130,13 +163,16 @@ class FairnessRedTeamAgent:
                     "log":       new_lines,
                     "status":    node_state.get("status", "running"),
                 }
-        except Exception as graph_err:
-            logger.error(f"[{audit_id}] Graph execution error: {graph_err}")
-            latest_state = {**latest_state, "log": [*latest_state.get("log", []), f"[Error] {graph_err}"]}
+        except GeneratorExit:
+            stop_event.set()
+            return
+
+        if stop_event.is_set():
+            yield {"node": "complete", "status": "stopped", "results": {}}
+            return
 
         # Always emit the complete event so the frontend can render the report
-        safe_state = {k: v for k, v in latest_state.items() if k not in ("model", "X_train", "y_train")}
-        # If report node never ran (e.g. graph crashed), build a minimal report here
+        safe_state = {k: v for k, v in latest_state.items() if k not in ("model", "X_train", "y_train", "_stop_event")}
         if "final_report" not in safe_state:
             validation    = safe_state.get("validation_results", {})
             patch_results = safe_state.get("patch_results", {})
@@ -555,8 +591,9 @@ class FairnessRedTeamAgent:
         y_train          = state["y_train"]
         log              = list(state.get("log", []))
         group_corrections = state.get("group_corrections", {})
+        patch_results_state = state.get("patch_results", {})
 
-        applied_attrs = {p["attribute"] for p in patch_results.get("applied", [])}
+        applied_attrs = {p["attribute"] for p in patch_results_state.get("applied", [])}
         if not applied_attrs and not group_corrections:
             log.append("[Validator Agent] No patches were applied — recording biases as unchanged")
             for e in state.get("evaluation_results", []):

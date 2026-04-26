@@ -817,19 +817,45 @@ export default function ResultsPage() {
                   </div>
                   <div className="glass rounded-2xl p-5 border border-white/5">
                     <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-3">Detected Model Biases</div>
-                    <div className="space-y-2">
-                      {modelProbeBiases.map((b: any, i: number) => (
-                        <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-white/2 border border-white/5">
-                          <div>
-                            <span className="text-white/80 text-xs font-mono font-semibold">{b.attribute}</span>
-                            <span className="text-white/40 text-xs ml-2">{b.value}</span>
+                    <div className="space-y-3">
+                      {modelProbeBiases.map((b: any, i: number) => {
+                        const isFlip = b.type === 'counterfactual_flip'
+                        const mag = b.magnitude ?? 0
+                        const barPct = Math.min(mag * (isFlip ? 200 : 150), 100)
+                        const barColor = b.severity === 'critical' ? '#ef4444' : b.severity === 'high' ? '#f97316' : b.severity === 'medium' ? '#eab308' : '#22c55e'
+                        const spd = b.spd ?? 0
+                        return (
+                          <div key={i} className="p-4 rounded-xl bg-white/2 border border-white/8 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-white/85 text-xs font-mono font-semibold">{b.attribute}</span>
+                                {b.value && b.value !== b.attribute && (
+                                  <span className="text-white/40 text-xs font-mono bg-white/5 px-1.5 py-0.5 rounded">{String(b.value).slice(0, 30)}</span>
+                                )}
+                                <span className="text-white/30 text-xs font-mono">{isFlip ? 'counterfactual flip' : 'statistical disparity'}</span>
+                              </div>
+                              <SeverityBadge level={b.severity} />
+                            </div>
+                            {/* Magnitude bar */}
+                            <div className="flex items-center gap-3">
+                              <div className="flex-1 relative h-1.5 rounded bg-white/5">
+                                <div className="absolute left-0 top-0 h-full rounded" style={{ width: `${barPct}%`, background: barColor }} />
+                              </div>
+                              <span className="text-xs font-mono flex-shrink-0" style={{ color: barColor }}>
+                                {isFlip
+                                  ? `${(mag * 100).toFixed(1)}% flip rate`
+                                  : `SPD ${spd >= 0 ? '+' : ''}${(spd * 100).toFixed(1)}%`}
+                              </span>
+                            </div>
+                            {/* Interpretation */}
+                            <div className="text-white/30 text-xs font-mono">
+                              {isFlip
+                                ? `Changing only the ${b.attribute} attribute flips the model's decision ${(mag * 100).toFixed(1)}% of the time — model output depends on demographics.`
+                                : `Group "${b.value}" has a ${Math.abs(spd * 100).toFixed(1)}% ${spd < 0 ? 'lower' : 'higher'} positive rate than the reference average.`}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-3">
-                            <span className="text-white/30 text-xs font-mono">magnitude {b.magnitude?.toFixed(3)}</span>
-                            <SeverityBadge level={b.severity} />
-                          </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                       {modelProbeBiases.length === 0 && <div className="text-white/20 text-sm font-mono text-center py-4">No hidden biases detected in model probe</div>}
                     </div>
                   </div>
