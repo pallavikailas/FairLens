@@ -221,7 +221,7 @@ export default function RedTeamPage() {
           )}
 
           {running && (
-            <button onClick={() => { stopRef.current?.(); setRunning(false) }}
+            <button onClick={() => { stopRef.current?.(); setRunning(false); setActiveNode(null) }}
               className="w-full mt-4 py-2.5 rounded-xl border border-white/10 text-white/40 hover:text-white/70 text-sm font-mono transition-all">
               Stop agent
             </button>

@@ -171,30 +171,32 @@ class FairnessRedTeamAgent:
             yield {"node": "complete", "status": "stopped", "results": {}}
             return
 
-        # Always emit the complete event so the frontend can render the report
-        safe_state = {k: v for k, v in latest_state.items() if k not in ("model", "X_train", "y_train", "_stop_event")}
-        if "final_report" not in safe_state:
-            validation    = safe_state.get("validation_results", {})
-            patch_results = safe_state.get("patch_results", {})
-            safe_state["final_report"] = {
+        # Always emit the complete event so the frontend can render the report.
+        # Only send final_report (not the full state) to avoid raw probe feature
+        # data that can contain NaN values and produce invalid JSON.
+        final_report = latest_state.get("final_report")
+        if final_report is None:
+            validation    = latest_state.get("validation_results", {})
+            patch_results = latest_state.get("patch_results", {})
+            final_report = {
                 "audit_id":        audit_id,
                 "completed_at":    datetime.utcnow().isoformat(),
-                "iterations":      safe_state.get("iteration", 0),
-                "biases_targeted": len(safe_state.get("confirmed_biases", [])),
+                "iterations":      latest_state.get("iteration", 0),
+                "biases_targeted": len(latest_state.get("confirmed_biases", [])),
                 "patches_applied": len(patch_results.get("applied", [])),
-                "patches_failed":  len(patch_results.get("failed", [])),
+                "patches_failed":  patch_results.get("failed", []),
                 "biases_improved": len(validation.get("improved", [])),
                 "biases_regressed": len(validation.get("regressed", [])),
                 "biases_unchanged": len(validation.get("unchanged", [])),
                 "validation":       validation,
-                "mitigation_plan":  safe_state.get("mitigation_plan", []),
+                "mitigation_plan":  latest_state.get("mitigation_plan", []),
                 "patch_results":    patch_results,
                 "remediated_fairness": self._fairness_delta(validation),
                 "patched_model_artifact": self._serialise_model_artifact(state.get("model")),
-                "log_summary":     safe_state.get("log", [])[-15:],
+                "log_summary":     latest_state.get("log", [])[-15:],
                 "status":          "complete",
             }
-        yield {"node": "complete", "status": "done", "results": safe_state}
+        yield {"node": "complete", "status": "done", "results": final_report}
 
     # ── Nodes ─────────────────────────────────────────────────────────────────
 
@@ -594,6 +596,7 @@ class FairnessRedTeamAgent:
         patch_results_state = state.get("patch_results", {})
 
         applied_attrs = {p["attribute"] for p in patch_results_state.get("applied", [])}
+        validation: Dict[str, List] = {"improved": [], "regressed": [], "unchanged": []}
         if not applied_attrs and not group_corrections:
             log.append("[Validator Agent] No patches were applied — recording biases as unchanged")
             for e in state.get("evaluation_results", []):
@@ -601,8 +604,6 @@ class FairnessRedTeamAgent:
             return {**state, "validation_results": validation, "log": log}
 
         log.append("[Validator Agent] Re-evaluating bias metrics post-patch...")
-
-        validation: Dict[str, List] = {"improved": [], "regressed": [], "unchanged": []}
 
         for e in state.get("evaluation_results", []):
             attr          = e["attribute"]

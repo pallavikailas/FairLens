@@ -863,13 +863,15 @@ export default function ResultsPage() {
                   {(() => {
                     const patterns: any[] = modelProbe.constitution?.patterns ?? []
                     const allCols: string[] = modelProbe.reference_protected_cols ?? []
-                    // Build map from patterns; attrs missing from patterns = zero sensitivity
                     const patternMap: Record<string, any> = {}
                     for (const p of patterns) patternMap[p.attribute] = p
                     const rows = allCols.map(attr => patternMap[attr] ?? {
                       attribute: attr, flip_rate: 0, avg_probability_shift: 0, severity: 'low'
                     })
                     if (!rows.length) return null
+                    // Detect degenerate model (always predicts one class on reference probe)
+                    const singleClassBias = modelProbeBiases.find((b: any) => b.attribute === 'model_output_distribution')
+                    const allZero = rows.every((p: any) => (p.flip_rate ?? 0) < 0.01 && (p.avg_probability_shift ?? 0) < 0.01)
                     return (
                       <div className="glass rounded-2xl p-5 border border-white/5">
                         <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-1">Probability Sensitivity by Protected Attribute</div>
@@ -877,23 +879,34 @@ export default function ResultsPage() {
                           How much does changing only this demographic attribute shift the model's output probability?
                           Zero flip rate = model is insensitive to that attribute on the reference probe.
                         </p>
+                        {(singleClassBias || allZero) && (
+                          <div className="mb-3 px-3 py-2 rounded-xl bg-signal-amber/8 border border-signal-amber/20 text-signal-amber text-xs font-mono">
+                            ⚠ {singleClassBias
+                              ? 'Model predicts a single class on the reference probe — direct demographic sensitivity cannot be measured. Any bias found in Phase 1/2 is mediated through proxy features, not direct attribute use.'
+                              : 'No direct demographic sensitivity detected. Bias may still exist through correlated proxy features — check the Bias Topology Map and Proxy Hunter results.'}
+                          </div>
+                        )}
                         <div className="space-y-2">
                           {rows.map((p: any, i: number) => {
                             const fr = p.flip_rate ?? 0
                             const shift = p.avg_probability_shift ?? 0
-                            const hasSignal = fr > 0.01
-                            const barColor = fr > 0.15 ? '#ef4444' : fr > 0.05 ? '#eab308' : '#22c55e'
+                            // Show signal for either flip rate OR probability shift
+                            const hasFlipSignal = fr > 0.01
+                            const hasShiftSignal = shift > 0.01
+                            const hasSignal = hasFlipSignal || hasShiftSignal
+                            const barValue = hasFlipSignal ? fr : shift
+                            const barColor = fr > 0.15 || shift > 0.15 ? '#ef4444' : fr > 0.05 || shift > 0.05 ? '#eab308' : '#22c55e'
                             return (
                               <div key={i} className={`flex items-center gap-3 p-3 rounded-xl border ${hasSignal ? 'border-white/10 bg-white/3' : 'border-white/3 bg-white/1'}`}>
                                 <div className="w-32 flex-shrink-0 text-xs font-mono font-semibold text-white/70">{p.attribute}</div>
                                 <div className="flex-1 relative h-1.5 rounded bg-white/5">
-                                  <div className="absolute left-0 top-0 h-full rounded" style={{ width: `${Math.min(fr * 300, 100)}%`, background: barColor }} />
+                                  <div className="absolute left-0 top-0 h-full rounded" style={{ width: `${Math.min(barValue * 300, 100)}%`, background: barColor }} />
                                 </div>
                                 <div className="w-20 text-right text-xs font-mono" style={{ color: hasSignal ? barColor : '#ffffff22' }}>
-                                  {hasSignal ? `${(fr * 100).toFixed(1)}% flips` : 'no change'}
+                                  {hasFlipSignal ? `${(fr * 100).toFixed(1)}% flips` : 'no change'}
                                 </div>
-                                <div className="w-16 text-right text-xs font-mono text-white/25">
-                                  {shift > 0 ? `±${(shift * 100).toFixed(1)}%` : '—'}
+                                <div className="w-16 text-right text-xs font-mono" style={{ color: hasShiftSignal ? barColor : '#ffffff22' }}>
+                                  {shift > 0.001 ? `±${(shift * 100).toFixed(1)}%` : '—'}
                                 </div>
                                 <div className="w-20 text-right">
                                   {hasSignal
@@ -1045,6 +1058,18 @@ export default function ResultsPage() {
 
           {activeTab === 'cartography' && (
             <div className="space-y-4">
+              {/* Degenerate model warning for topology map */}
+              {(() => {
+                const points: any[] = carto?.map_points || []
+                const allNearZero = points.length > 0 && points.every((p: any) => (p.y ?? 0) < 0.02)
+                const singleClassDetected = modelProbeBiases.some((b: any) => b.attribute === 'model_output_distribution')
+                if (!allNearZero && !singleClassDetected) return null
+                return (
+                  <div className="px-4 py-3 rounded-xl bg-signal-amber/8 border border-signal-amber/20 text-signal-amber text-xs font-mono">
+                    ⚠ The model predicts a single class (or very rarely predicts positive) on this dataset. All demographic groups have near-zero positive rates, so all points cluster at the origin — the topology map cannot reveal disparity under these conditions. Bias is still captured via Phase 1 reference probe, counterfactual analysis, and the Proxy Hunter.
+                  </div>
+                )
+              })()}
               <div className="grid md:grid-cols-3 gap-6">
                 <div className="md:col-span-2 glass rounded-2xl p-5 border border-white/5">
                   <h3 className="font-display font-semibold text-white text-sm mb-1">Bias Topology Map</h3>
@@ -1055,7 +1080,7 @@ export default function ResultsPage() {
                 </div>
                 <div className="glass rounded-2xl p-5 border border-white/5 overflow-y-auto max-h-[400px]">
                   <h3 className="font-display font-semibold text-white text-sm mb-4">Hotspots</h3>
-                  {carto?.hotspots?.map((h: any, i: number) => (
+                  {carto?.hotspots?.length > 0 ? carto.hotspots.map((h: any, i: number) => (
                     <div key={i} className="border-b border-white/5 pb-3 mb-3 last:border-0">
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-white/70 text-xs font-mono">{h.dominant_slice}</span>
@@ -1065,7 +1090,11 @@ export default function ResultsPage() {
                         {h.size} samples · bias score {h.mean_bias_magnitude?.toFixed(3)}
                       </div>
                     </div>
-                  ))}
+                  )) : (
+                    <div className="text-white/20 text-xs font-mono">
+                      No statistically significant hotspots detected. If the model predicts a single class, use Phase 1 and Phase 2 findings instead.
+                    </div>
+                  )}
                 </div>
               </div>
               {Object.keys(carto?.metric_confidence_intervals || {}).length > 0 && (
