@@ -633,10 +633,9 @@ class GenerativeLLMAdapter(BaseModelAdapter):
         return self._parse_response(generated)
 
     def _query_gemini(self, prompt: str) -> float:
-        import google.generativeai as genai
-        genai.configure(api_key=self.api_key)
-        model = genai.GenerativeModel(self.model_name)
-        resp = model.generate_content(prompt)
+        from google import genai
+        client = genai.Client(api_key=self.api_key)
+        resp = client.models.generate_content(model=self.model_name, contents=prompt)
         return self._parse_response(resp.text or "")
 
 
