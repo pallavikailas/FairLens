@@ -102,6 +102,7 @@ def generate_pdf_report(result: dict[str, Any]) -> bytes:
     proxy_hunt = result.get("proxy_hunt") or {}
     redteam = result.get("redteam") or {}
     model_probe = result.get("model_probe") or {}
+    dataset_probe = result.get("dataset_probe") or {}
     audit_id = result.get("audit_id", "—")
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
