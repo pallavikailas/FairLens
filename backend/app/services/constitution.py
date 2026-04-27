@@ -11,6 +11,7 @@ Key innovation:
 - Human-readable enough for legal/HR teams, precise enough for engineers
 """
 
+import asyncio
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional
@@ -51,26 +52,45 @@ class CounterfactualConstitutionService:
         """
         logger.info(f"[{audit_id}] Generating Counterfactual Constitution (model={'provided' if model else 'none'})")
 
-        # API-based models are slow — limit CF samples to avoid Cloud Run timeouts.
-        # HF classifiers: ~0.3s/call × 200 samples × 3 attrs × 2 flips = 360s (too slow).
-        # LLMs are even slower. Local sklearn models can handle 200 comfortably.
+        # API-based models are slow — limit CF samples to avoid blocking the event loop.
+        # HF classifiers: ~0.3s/call × many samples × attrs × flips adds up fast.
+        # LLMs are even slower. Local sklearn models can handle 150 comfortably.
         model_type_str = (model.get_model_type() if hasattr(model, "get_model_type") else "") or ""
         is_generative = "GenerativeLLM" in model_type_str
         is_api_model = is_generative or any(t in model_type_str for t in ("HuggingFace", "REST:"))
-        cf_n_samples = 20 if is_generative else 50 if is_api_model else 200
+        cf_n_samples = 10 if is_generative else 20 if is_api_model else 150
 
-        # Step 1: Build counterfactual pairs (empty when no model available)
-        cf_pairs = self._generate_cf_pairs(model, X, y_pred, protected_cols, n_samples=cf_n_samples)
+        # Step 1: Build counterfactual pairs in a thread pool so the async event loop
+        # stays responsive (Cloud Run health checks keep succeeding while this runs).
+        loop = asyncio.get_event_loop()
+        try:
+            cf_pairs = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: self._generate_cf_pairs(model, X, y_pred, protected_cols, n_samples=cf_n_samples),
+                ),
+                timeout=75.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"[{audit_id}] CF pair generation timed out — continuing with empty pairs")
+            cf_pairs = []
 
         # Step 2: Extract decision patterns
         patterns = self._extract_patterns(cf_pairs, protected_cols)
 
-        # Step 3: Gemini synthesis
-        constitution_text = await self._gemini_synthesise(
-            patterns, cf_pairs, cartography_results, protected_cols, feature_names, audit_id,
-            model_available=(model is not None),
-            model=model,
-        )
+        # Step 3: Gemini synthesis (capped so the whole request stays well under Cloud Run limits)
+        try:
+            constitution_text = await asyncio.wait_for(
+                self._gemini_synthesise(
+                    patterns, cf_pairs, cartography_results, protected_cols, feature_names, audit_id,
+                    model_available=(model is not None),
+                    model=model,
+                ),
+                timeout=60.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"[{audit_id}] Gemini constitution synthesis timed out — using fallback")
+            constitution_text = "## Constitution\n\nConstitution synthesis timed out. Bias patterns are available in the cartography results."
 
         # Step 4: Parse into structured sections
         sections = self._parse_constitution(constitution_text)
