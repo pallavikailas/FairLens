@@ -185,8 +185,7 @@ class ModelBiasProbe:
     @staticmethod
     def _get_feature_names(model) -> Optional[List[str]]:
         """Extract feature names from sklearn-style model, including ensembles and pipelines."""
-        # Adapters may store the raw model under "_model" (old convention) or "model" (SklearnAdapter)
-        raw = getattr(model, "_model", None) or getattr(model, "model", None) or model
+        raw = getattr(model, "_model", model)
 
         def _from_estimator(est) -> Optional[List[str]]:
             for attr in ("feature_names_in_", "feature_names"):
