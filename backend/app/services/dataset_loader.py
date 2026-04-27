@@ -28,12 +28,16 @@ _HF_CACHE_TTL = 600  # seconds
 
 
 async def _get_with_retry(client: httpx.AsyncClient, url: str, max_retries: int = 3, **kwargs) -> httpx.Response:
-    """GET with exponential back-off on 429 responses."""
+    """GET with exponential back-off on 429 responses, honouring Retry-After."""
     for attempt in range(max_retries):
         resp = await client.get(url, **kwargs)
         if resp.status_code != 429:
             return resp
-        wait = 2 ** attempt  # 1s, 2s, 4s
+        # Honour server-supplied Retry-After (seconds or HTTP-date int)
+        try:
+            wait = int(resp.headers.get("Retry-After", 0)) or 2 ** attempt
+        except (ValueError, TypeError):
+            wait = 2 ** attempt
         logger.info(f"[HF] 429 rate-limited on {url} — retrying in {wait}s (attempt {attempt+1}/{max_retries})")
         await asyncio.sleep(wait)
     return resp  # return last response even if still 429
@@ -85,7 +89,7 @@ async def _load_huggingface(name: str) -> str:
       3. datasets-server /parquet → download first parquet shard < 100 MB
     All HTTP requests retry on 429 with exponential back-off.
     """
-    async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
 
         # --- Strategy 1: datasets-server /rows ---
         # Use /splits (not /info) — it directly returns valid (config, split) pairs,
@@ -161,7 +165,10 @@ async def _load_huggingface(name: str) -> str:
         except Exception as e:
             logger.debug(f"[HF] Hub tree listing failed: {e}")
 
-        # --- Strategy 3: parquet shards (with per-shard 429 retry) ---
+        # --- Strategy 3: parquet shards (with aggressive 429 retry) ---
+        # Some datasets (e.g. LabHC/bias_in_bios) are parquet-only and HuggingFace
+        # rate-limits parquet CDN downloads heavily.  We retry up to 6 times per shard
+        # (1+2+4+8+16+32 = 63 s max wait) and honour Retry-After headers.
         try:
             parquet_resp = await _get_with_retry(client, f"{_HF_SERVER}/parquet?dataset={name}")
             if parquet_resp.status_code == 200:
@@ -169,10 +176,10 @@ async def _load_huggingface(name: str) -> str:
                     parquet_resp.json().get("parquet_files", []),
                     key=lambda x: x.get("size", _MAX_FILE_BYTES + 1),
                 )
-                for pf in pfiles[:6]:  # try more shards to survive 429s
+                for pf in pfiles[:4]:  # fewer shards, more retries per shard
                     if pf.get("size", _MAX_FILE_BYTES + 1) > _MAX_FILE_BYTES:
                         continue
-                    dl = await _get_with_retry(client, pf["url"])
+                    dl = await _get_with_retry(client, pf["url"], max_retries=6)
                     if dl.status_code != 200:
                         logger.debug(f"[HF] Parquet shard {pf.get('url','')[:60]} returned {dl.status_code}")
                         continue
