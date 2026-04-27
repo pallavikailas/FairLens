@@ -102,9 +102,24 @@ class ModelBiasProbe:
             raw_preds = model.predict(X_ref)
             model_predictions = [int(p) for p in raw_preds]
             logger.info(f"[{audit_id}] Model generated {len(model_predictions)} predictions on reference dataset")
-        except Exception as e:
-            logger.error(f"[{audit_id}] Model prediction on reference dataset failed: {e}")
-            raise ValueError(f"Model could not be probed on reference dataset: {e}")
+        except Exception as first_err:
+            # Fallback: label-encode any categorical columns and retry
+            logger.warning(f"[{audit_id}] Direct prediction failed ({first_err}), retrying with label encoding")
+            try:
+                from sklearn.preprocessing import LabelEncoder
+                X_enc = X_ref.copy()
+                for col in X_enc.select_dtypes(include=["object", "category"]).columns:
+                    try:
+                        X_enc[col] = LabelEncoder().fit_transform(X_enc[col].astype(str))
+                    except Exception:
+                        X_enc[col] = 0
+                X_enc = X_enc.fillna(0)
+                raw_preds = model.predict(X_enc)
+                model_predictions = [int(p) for p in raw_preds]
+                logger.info(f"[{audit_id}] Label-encoded prediction: {len(model_predictions)} predictions")
+            except Exception as e:
+                logger.error(f"[{audit_id}] Model prediction on reference dataset failed: {e}")
+                raise ValueError(f"Model could not be probed on reference dataset: {e}")
 
         diagnostics = self._prediction_diagnostics(
             ref_df=ref_df,
@@ -186,7 +201,15 @@ class ModelBiasProbe:
     @staticmethod
     def _get_feature_names(model) -> Optional[List[str]]:
         """Extract feature names from sklearn-style model, including ensembles and pipelines."""
-        raw = getattr(model, "_model", model)
+        # Unwrap adapter layers: try _raw_model() first (BaseModelAdapter interface),
+        # then common attribute names used by different adapter implementations.
+        if hasattr(model, "_raw_model"):
+            try:
+                raw = model._raw_model()
+            except Exception:
+                raw = getattr(model, "model", getattr(model, "_model", model))
+        else:
+            raw = getattr(model, "model", getattr(model, "_model", model))
 
         def _from_estimator(est) -> Optional[List[str]]:
             for attr in ("feature_names_in_", "feature_names"):

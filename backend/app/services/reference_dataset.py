@@ -181,7 +181,8 @@ def generate_model_specific_probe(
     numeric/categorical values so the model can always score the rows.
 
     When the model has no demographic features, standard gender/race/age_group columns
-    are injected alongside the model features.  The returned ``model_feature_cols``
+    are injected alongside the model features **with correlated socioeconomic values**
+    to enable disparate-impact detection.  The returned ``model_feature_cols``
     list contains only the columns that should be passed to ``model.predict()``.
 
     Returns
@@ -249,21 +250,55 @@ def generate_model_specific_probe(
     # model_feature_cols tracks which columns to pass to model.predict().
     model_feature_cols = list(model_feature_names)
     if not detected_protected:
-        data["gender"]    = rng.choice(_GENDERS,    n, p=[0.4, 0.4, 0.2])
-        data["race"]      = rng.choice(_RACES,      n, p=[0.40, 0.20, 0.20, 0.15, 0.05])
-        data["age_group"] = rng.choice(_AGE_GROUPS, n)
+        genders    = rng.choice(_GENDERS,    n, p=[0.4, 0.4, 0.2])
+        races      = rng.choice(_RACES,      n, p=[0.40, 0.20, 0.20, 0.15, 0.05])
+        age_groups = rng.choice(_AGE_GROUPS, n)
+        data["gender"]    = genders
+        data["race"]      = races
+        data["age_group"] = age_groups
         detected_protected = ["gender", "race", "age_group"]
+
+        # Retroactively correlate numeric model features with demographics so the
+        # probe can surface disparate-impact bias (not just direct discrimination).
+        # These correlations reflect documented real-world socioeconomic disparities.
+        _RACE_INCOME_SCALE  = {"White": 1.25, "Asian": 1.30, "Hispanic": 0.72, "Black": 0.68, "Other": 0.82}
+        _RACE_CREDIT_SCALE  = {"White": 1.15, "Asian": 1.12, "Hispanic": 0.88, "Black": 0.82, "Other": 0.93}
+        _GENDER_INCOME_SCALE = {"Male": 1.12, "Female": 0.86, "Non-binary": 0.92}
+        _AGE_INCOME_SCALE    = {"<18": 0.28, "18-30": 0.68, "31-45": 1.12, "46-60": 1.22, "60+": 0.88}
+
+        def _scale(base_arr: np.ndarray, scales: np.ndarray, noise_std: float = 0.12) -> np.ndarray:
+            scaled = base_arr * scales * (1 + rng.normal(0, noise_std, len(base_arr)))
+            mn, mx = base_arr.min(), base_arr.max()
+            return np.clip(scaled, mn, mx).astype(base_arr.dtype)
+
+        for feat, arr in list(data.items()):
+            if feat not in model_feature_cols:
+                continue
+            arr_np = np.asarray(arr)
+            if not np.issubdtype(arr_np.dtype, np.integer):
+                continue
+            fl = feat.lower().replace("_", " ").replace("-", " ")
+            tokens = set(fl.split())
+            race_scales   = np.array([_RACE_INCOME_SCALE.get(r, 1.0) for r in races])
+            gender_scales = np.array([_GENDER_INCOME_SCALE.get(g, 1.0) for g in genders])
+            if tokens & _INCOME_KW:
+                age_s = np.array([_AGE_INCOME_SCALE.get(a, 1.0) for a in age_groups])
+                data[feat] = _scale(arr_np, race_scales * gender_scales * age_s)
+            elif tokens & _CREDIT_KW:
+                credit_scales = np.array([_RACE_CREDIT_SCALE.get(r, 1.0) for r in races])
+                data[feat] = _scale(arr_np, credit_scales)
+            elif tokens & _EXP_KW:
+                data[feat] = _scale(arr_np, gender_scales)
 
     # Synthetic target (not a real model feature — used only for cartography baseline)
     probe_target = "_probe_outcome"
-    numeric_cols = [k for k, v in data.items() if k in model_feature_cols and isinstance(v[0], (int, np.integer))]
+    numeric_cols = [k for k, v in data.items() if k in model_feature_cols and np.issubdtype(np.asarray(v).dtype, np.number)]
     if not numeric_cols:
-        numeric_cols = [k for k, v in data.items() if isinstance(v[0], (int, np.integer))]
+        numeric_cols = [k for k, v in data.items() if np.issubdtype(np.asarray(v).dtype, np.number)]
     if numeric_cols:
         score_col = numeric_cols[0]
-        data[probe_target] = (
-            (np.array(data[score_col]) > np.array(data[score_col]).mean()).astype(int)
-        )
+        score_arr = np.asarray(data[score_col], dtype=float)
+        data[probe_target] = (score_arr > score_arr.mean()).astype(int)
     else:
         data[probe_target] = rng.integers(0, 2, n).astype(int)
 

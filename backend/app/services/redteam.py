@@ -32,6 +32,70 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+class _FairLensRemediatedModel:
+    """
+    Wrapper that embeds per-group correction factors and/or per-group decision
+    thresholds into a serialisable sklearn-compatible model.
+
+    When the user loads the downloaded .pkl and calls model.predict(X), the
+    fairness corrections are applied automatically — no extra code needed.
+    """
+
+    def __init__(self, base_model: Any, group_corrections: Dict = None, group_thresholds: Dict = None):
+        self._base_model       = base_model
+        self.group_corrections = group_corrections or {}
+        self.group_thresholds  = group_thresholds  or {}
+
+    # expose feature_names_in_ if the wrapped model has them
+    def __getattr__(self, name: str):
+        return getattr(self._base_model, name)
+
+    def fit(self, X, y, **kwargs):
+        self._base_model.fit(X, y, **kwargs)
+        return self
+
+    def predict_proba(self, X: "pd.DataFrame") -> "np.ndarray":
+        if hasattr(self._base_model, "predict_proba"):
+            proba = self._base_model.predict_proba(X)[:, 1].copy()
+        else:
+            preds = self._base_model.predict(X)
+            proba = preds.astype(float)
+
+        # Apply demographic-parity correction factors
+        for attr, corr_data in self.group_corrections.items():
+            if isinstance(corr_data, dict) and "correction_factors" in corr_data:
+                factors = corr_data["correction_factors"]
+            elif isinstance(corr_data, dict):
+                factors = corr_data
+            else:
+                continue
+            if hasattr(X, "columns") and attr in X.columns:
+                for val, factor in factors.items():
+                    mask = X[attr].astype(str) == str(val)
+                    proba[mask] = np.clip(proba[mask] * float(factor), 0.0, 1.0)
+
+        return np.column_stack([1 - proba, proba])
+
+    def predict(self, X: "pd.DataFrame") -> "np.ndarray":
+        proba = self.predict_proba(X)[:, 1]
+
+        # Per-group decision thresholds
+        if self.group_thresholds and hasattr(X, "columns"):
+            preds = np.full(len(X), -1, dtype=int)
+            for attr, thresholds in self.group_thresholds.items():
+                if attr not in X.columns:
+                    continue
+                for val, thresh in thresholds.items():
+                    mask = (X[attr].astype(str) == str(val)).values
+                    preds[mask] = (proba[mask] >= float(thresh)).astype(int)
+            # Default threshold for rows not covered
+            default_mask = preds == -1
+            preds[default_mask] = (proba[default_mask] >= 0.5).astype(int)
+            return preds
+
+        return (proba >= 0.5).astype(int)
+
+
 class RedTeamState(dict):
     model: Any
     X_train: pd.DataFrame
@@ -192,7 +256,11 @@ class FairnessRedTeamAgent:
                 "mitigation_plan":  latest_state.get("mitigation_plan", []),
                 "patch_results":    patch_results,
                 "remediated_fairness": self._fairness_delta(validation),
-                "patched_model_artifact": self._serialise_model_artifact(state.get("model")),
+                "patched_model_artifact": self._serialise_model_artifact(
+                    state.get("model"),
+                    group_corrections=latest_state.get("group_corrections"),
+                    group_thresholds=latest_state.get("group_thresholds"),
+                ),
                 "log_summary":     latest_state.get("log", [])[-15:],
                 "status":          "complete",
             }
@@ -467,7 +535,7 @@ class FairnessRedTeamAgent:
                 elif strategy == "sample_reweighing":
                     if self._model_is_trainable(model):
                         weights = self._compute_reweighing_weights(X_train, y_train, attr)
-                        raw     = getattr(model, "_model", model)
+                        raw     = self._unwrap_model(model)
                         raw.fit(X_train, y_train, sample_weight=weights)
                         log.append(f"[Patcher Agent] Reweighing applied — model retrained")
                         patch_results["applied"].append({"strategy": strategy, "attribute": attr})
@@ -696,10 +764,14 @@ class FairnessRedTeamAgent:
             "validation":        validation,
             "mitigation_plan":   state.get("mitigation_plan", []),
             "patch_results":     patch_results,
-            "remediated_fairness":    self._fairness_delta(validation),
-            "patched_model_artifact": self._serialise_model_artifact(state.get("model")),
-            "log_summary":       log[-15:],
-            "status":            "complete",
+            "remediated_fairness": self._fairness_delta(validation),
+            "patched_model_artifact": self._serialise_model_artifact(
+                state.get("model"),
+                group_corrections=state.get("group_corrections"),
+                group_thresholds=state.get("group_thresholds"),
+            ),
+            "log_summary":  log[-15:],
+            "status":       "complete",
         }
 
         log.append("[Report Agent] Done.")
@@ -721,8 +793,17 @@ class FairnessRedTeamAgent:
     # ── Mitigation strategy selection ─────────────────────────────────────────
 
     @staticmethod
-    def _model_is_trainable(model) -> bool:
-        raw = getattr(model, "_model", model)
+    def _unwrap_model(model) -> Any:
+        """Return the raw estimator inside any adapter wrapper."""
+        if hasattr(model, "_raw_model"):
+            try:
+                return model._raw_model()
+            except Exception:
+                pass
+        return getattr(model, "model", getattr(model, "_model", model))
+
+    def _model_is_trainable(self, model) -> bool:
+        raw = self._unwrap_model(model)
         return hasattr(raw, "fit") and callable(getattr(raw, "fit", None))
 
     @staticmethod
@@ -812,9 +893,13 @@ class FairnessRedTeamAgent:
             "per_attribute":  measured,
         }
 
-    @staticmethod
-    def _serialise_model_artifact(model: Any) -> Optional[Dict[str, Any]]:
-        raw = getattr(model, "_model", model)
+    def _serialise_model_artifact(
+        self,
+        model: Any,
+        group_corrections: Optional[Dict] = None,
+        group_thresholds: Optional[Dict] = None,
+    ) -> Optional[Dict[str, Any]]:
+        raw = self._unwrap_model(model)
         if not hasattr(raw, "fit"):
             return {
                 "available": False,
@@ -825,13 +910,26 @@ class FairnessRedTeamAgent:
                 ),
             }
         try:
-            payload = base64.b64encode(pickle.dumps(raw)).decode("ascii")
+            # Wrap raw model with correction factors so the downloaded .pkl
+            # applies fairness patches automatically at inference time.
+            if group_corrections or group_thresholds:
+                artifact = _FairLensRemediatedModel(
+                    raw,
+                    group_corrections=group_corrections or {},
+                    group_thresholds=group_thresholds or {},
+                )
+            else:
+                artifact = raw
+            payload = base64.b64encode(pickle.dumps(artifact)).decode("ascii")
             return {
                 "available":   True,
                 "filename":    "fairlens-remediated-model.pkl",
                 "format":      "pickle",
                 "pickle_b64":  payload,
-                "message":     "Download the remediated model and replace your deployed artifact.",
+                "message":     (
+                    "The patched model includes per-group correction factors. "
+                    "Load with joblib.load() and call model.predict(X) — corrections are automatic."
+                ),
             }
         except Exception as exc:
             return {

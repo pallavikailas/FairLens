@@ -85,6 +85,7 @@ export default function RedTeamPage() {
   const [finalResults, setFinalResults] = useState<any>(null)
   const [running, setRunning] = useState(false)
   const [started, setStarted] = useState(false)
+  const [stoppedByUser, setStoppedByUser] = useState(false)
   const stopRef = useRef<(() => void) | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -98,7 +99,7 @@ export default function RedTeamPage() {
     if (!hasModel) return
     if (!store.datasetFile && store.datasetSource === 'upload') return
     if (store.confirmedBiases.length === 0) return
-    setRunning(true); setStarted(true)
+    setRunning(true); setStarted(true); setStoppedByUser(false)
     setAllLogs([]); setDoneNodes(new Set()); setFinalResults(null)
 
     const auditResults = {
@@ -221,10 +222,23 @@ export default function RedTeamPage() {
           )}
 
           {running && (
-            <button onClick={() => { stopRef.current?.(); setRunning(false); setActiveNode(null) }}
-              className="w-full mt-4 py-2.5 rounded-xl border border-white/10 text-white/40 hover:text-white/70 text-sm font-mono transition-all">
+            <button onClick={() => {
+              stopRef.current?.()
+              setRunning(false)
+              setActiveNode(null)
+              setStarted(false)
+              setStoppedByUser(true)
+            }}
+              className="w-full mt-4 py-2.5 rounded-xl bg-signal-red/10 border border-signal-red/30 text-signal-red hover:bg-signal-red/20 text-sm font-mono transition-all flex items-center justify-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-sm bg-signal-red inline-block" />
               Stop agent
             </button>
+          )}
+
+          {stoppedByUser && !running && !finalResults && (
+            <div className="mt-4 p-3 rounded-xl bg-white/5 border border-white/10 text-white/40 text-xs font-mono">
+              Agent stopped. Results may be incomplete.
+            </div>
           )}
 
           {finalResults && (
@@ -270,7 +284,12 @@ export default function RedTeamPage() {
       <AnimatePresence>
         {finalResults && (
           <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} className="mt-8">
-            <h2 className="font-display font-bold text-white text-2xl mb-6">Red-Team Report</h2>
+            {/* Divider */}
+            <div className="flex items-center gap-3 mb-6">
+              <div className="flex-1 h-px bg-white/10" />
+              <span className="text-white/20 text-xs font-mono uppercase tracking-widest">Report</span>
+              <div className="flex-1 h-px bg-white/10" />
+            </div>
 
             {/* Success / warning banner */}
             {improved.length > 0 ? (
@@ -282,7 +301,8 @@ export default function RedTeamPage() {
                   </div>
                   <div className="text-white/50 text-xs font-mono">
                     The agent applied mitigation patches and confirmed improvement across {improved.length} attribute{improved.length > 1 ? 's' : ''}.
-                    {(report.patches_failed?.length > 0) && ` ${report.patches_failed.length} attribute(s) could not be patched.`}
+                    {(validation.regressed?.length > 0) && ` ${validation.regressed.length} worsened.`}
+                    {(validation.unchanged?.length > 0) && ` ${validation.unchanged.length} unchanged.`}
                   </div>
                 </div>
               </div>
@@ -290,7 +310,9 @@ export default function RedTeamPage() {
               <div className="mb-6 p-4 rounded-2xl bg-white/5 border border-white/10 flex items-start gap-3">
                 <span className="text-white/30 text-xl mt-0.5">◈</span>
                 <div className="text-white/50 text-xs font-mono">
-                  Patches were applied but no measurable improvement was detected, or corrections are applied at inference time via the correction factors below.
+                  {patchesApplied > 0
+                    ? 'Corrections were applied via post-hoc factors embedded in the remediated model. Bias scores reflect estimated improvement.'
+                    : 'No patches were applied — no confirmed biases required remediation.'}
                 </div>
               </div>
             )}
@@ -298,10 +320,11 @@ export default function RedTeamPage() {
             {/* Summary cards */}
             <div className="grid md:grid-cols-4 gap-4 mb-6">
               {[
-                { label: 'Iterations', value: report.iterations || 1, color: 'text-white' },
-                { label: 'Patches Applied', value: patchesApplied, color: 'text-signal-green' },
-                { label: 'Biases Improved', value: improved.length, color: 'text-signal-green' },
-                { label: 'Patches Failed', value: report.patches_failed?.length ?? 0, color: report.patches_failed?.length > 0 ? 'text-signal-red' : 'text-white/30' },
+                { label: 'Iterations',      value: report.iterations ?? 1,                                    color: 'text-white' },
+                { label: 'Patches Applied', value: patchesApplied,                                            color: 'text-signal-green' },
+                { label: 'Biases Improved', value: improved.length,                                           color: 'text-signal-green' },
+                { label: 'Patches Failed',  value: Array.isArray(report.patches_failed) ? report.patches_failed.length : (report.patches_failed ?? 0),
+                  color: (Array.isArray(report.patches_failed) ? report.patches_failed.length : (report.patches_failed ?? 0)) > 0 ? 'text-signal-red' : 'text-white/30' },
               ].map((card, i) => (
                 <div key={i} className="glass rounded-2xl p-5 border border-white/5">
                   <div className="text-white/30 text-xs font-mono mb-2">{card.label}</div>
@@ -320,7 +343,7 @@ export default function RedTeamPage() {
                       <tr className="border-b border-white/5">
                         <th className="text-left text-white/30 pb-3 pr-4 font-normal">Attribute</th>
                         <th className="text-left text-white/30 pb-3 pr-4 font-normal">Strategy</th>
-                        <th className="text-left text-white/30 pb-3 pr-4 font-normal">Disparity (SPD)</th>
+                        <th className="text-left text-white/30 pb-3 pr-4 font-normal">SPD</th>
                         <th className="text-left text-white/30 pb-3 pr-4 font-normal">Source</th>
                         <th className="text-left text-white/30 pb-3 font-normal">Rationale</th>
                       </tr>
@@ -338,7 +361,7 @@ export default function RedTeamPage() {
                             {item.disparity != null ? item.disparity.toFixed(4) : '—'}
                           </td>
                           <td className="py-3 pr-4 text-white/40">{item.bias_source ?? '—'}</td>
-                          <td className="py-3 text-white/60 max-w-xs">{item.rationale}</td>
+                          <td className="py-3 text-white/60 max-w-xs truncate">{item.rationale}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -348,95 +371,125 @@ export default function RedTeamPage() {
             )}
 
             {/* Per-attribute before/after */}
-            {(fairnessDelta.per_attribute?.length > 0 || improved.length > 0 || validation.unchanged?.length > 0 || validation.regressed?.length > 0) && (
-              <div className="glass rounded-2xl p-5 border border-white/5 mb-6">
-                <div className="text-xs font-mono text-white/30 uppercase tracking-wider mb-4">Per-Attribute Bias Change</div>
-                {fairnessDelta.before_avg_spd != null && (
-                  <div className="grid md:grid-cols-3 gap-4 mb-5 pb-5 border-b border-white/5">
-                    <div>
-                      <div className="text-white/30 text-xs font-mono mb-1">Avg SPD Before</div>
-                      <div className="text-white font-display text-2xl">{fairnessDelta.before_avg_spd.toFixed(3)}</div>
-                    </div>
-                    <div>
-                      <div className="text-white/30 text-xs font-mono mb-1">Avg SPD After</div>
-                      <div className="text-signal-green font-display text-2xl">{fairnessDelta.after_avg_spd?.toFixed(3) ?? '—'}</div>
-                    </div>
-                    <div>
-                      <div className="text-white/30 text-xs font-mono mb-1">Improvement</div>
-                      <div className="text-lens-light font-display text-2xl">
-                        {fairnessDelta.improvement != null ? `+${fairnessDelta.improvement.toFixed(3)}` : '—'}
+            {(() => {
+              const rows: { attribute: string; before: number; after: number; status: string }[] = []
+              const seen = new Set<string>()
+
+              // Priority: measured improvements/regressions with actual before/after numbers
+              for (const a of [...(validation.improved || []), ...(validation.regressed || [])]) {
+                if (typeof a === 'object' && a.attribute && !seen.has(a.attribute)) {
+                  const delta = (a.before ?? 0) - (a.after ?? a.before ?? 0)
+                  rows.push({ attribute: a.attribute, before: a.before ?? 0, after: a.after ?? a.before ?? 0, status: delta > 0.001 ? 'improved' : delta < -0.001 ? 'regressed' : 'unchanged' })
+                  seen.add(a.attribute)
+                }
+              }
+              // Unchanged — may just be strings
+              for (const a of (validation.unchanged || [])) {
+                const attr = typeof a === 'string' ? a : a?.attribute
+                if (attr && !seen.has(attr)) {
+                  const plan = report.mitigation_plan?.find((m: any) => m.attribute === attr)
+                  const spd = plan?.disparity ?? 0
+                  rows.push({ attribute: attr, before: spd, after: spd, status: 'unchanged' })
+                  seen.add(attr)
+                }
+              }
+
+              if (!rows.length) return null
+              return (
+                <div className="glass rounded-2xl p-5 border border-white/5 mb-6">
+                  <div className="text-xs font-mono text-white/30 uppercase tracking-wider mb-4">Per-Attribute Bias Change</div>
+                  {fairnessDelta.before_avg_spd != null && (
+                    <div className="grid md:grid-cols-3 gap-4 mb-5 pb-5 border-b border-white/5">
+                      <div>
+                        <div className="text-white/30 text-xs font-mono mb-1">Avg SPD Before</div>
+                        <div className="text-white font-display text-2xl">{fairnessDelta.before_avg_spd.toFixed(3)}</div>
+                      </div>
+                      <div>
+                        <div className="text-white/30 text-xs font-mono mb-1">Avg SPD After</div>
+                        <div className="text-signal-green font-display text-2xl">{fairnessDelta.after_avg_spd?.toFixed(3) ?? '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-white/30 text-xs font-mono mb-1">Improvement</div>
+                        <div className="text-lens-light font-display text-2xl">
+                          {fairnessDelta.improvement != null ? `[−${fairnessDelta.improvement.toFixed(3)}]` : '—'}
+                        </div>
                       </div>
                     </div>
+                  )}
+                  <div className="space-y-3">
+                    {rows.map((item, i) => {
+                      const before = item.before
+                      const after  = item.after
+                      const delta  = before - after
+                      const statusColor = item.status === 'improved' ? '#10b981' : item.status === 'regressed' ? '#ef4444' : '#ffffff30'
+                      const barMax = Math.max(before, after, 0.001)
+                      return (
+                        <div key={i} className="flex items-center gap-3 py-1.5 border-b border-white/3 last:border-0">
+                          <div className="w-24 flex-shrink-0 text-xs font-mono text-white/70 truncate">{item.attribute}</div>
+                          {/* Before bar */}
+                          <div className="flex-1 flex items-center gap-1.5">
+                            <div className="flex-1 relative h-2 rounded-sm bg-white/5">
+                              <div className="absolute left-0 top-0 h-full rounded-sm"
+                                style={{ width: `${Math.max((before / barMax) * 100, 2)}%`, background: '#ef444460' }} />
+                            </div>
+                            <span className="text-white/40 text-xs font-mono w-12 text-right tabular-nums">{before.toFixed(3)}</span>
+                          </div>
+                          <span className="text-white/20 text-xs font-mono">→</span>
+                          {/* After bar */}
+                          <div className="flex-1 flex items-center gap-1.5">
+                            <div className="flex-1 relative h-2 rounded-sm bg-white/5">
+                              <div className="absolute left-0 top-0 h-full rounded-sm"
+                                style={{ width: `${Math.max((after / barMax) * 100, 2)}%`, background: statusColor }} />
+                            </div>
+                            <span className="text-xs font-mono w-12 text-right tabular-nums" style={{ color: statusColor }}>{after.toFixed(3)}</span>
+                          </div>
+                          {/* Delta badge */}
+                          <div className="w-20 flex-shrink-0 text-right">
+                            <span className="text-xs font-mono px-2 py-0.5 rounded-md"
+                              style={{ background: statusColor + '20', color: statusColor }}>
+                              {item.status === 'improved' ? `−${Math.abs(delta).toFixed(3)}` : item.status === 'regressed' ? `+${Math.abs(delta).toFixed(3)}` : '—'}
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
-                )}
-                <div className="space-y-2">
-                  {(fairnessDelta.per_attribute || [
-                    ...improved.map((a: any) => ({ attribute: a.attribute, before: a.before, after: a.after, status: 'improved' })),
-                    ...(validation.regressed || []).map((a: any) => ({ attribute: a.attribute, before: a.before, after: a.after, status: 'regressed' })),
-                    ...(validation.unchanged || []).map((a: any) => ({ attribute: a.attribute, before: a.before, after: a.after, status: 'unchanged' })),
-                  ]).map((item: any, i: number) => {
-                    const before = item.before ?? 0
-                    const after = item.after ?? before
-                    const delta = before - after
-                    const status = item.status || (delta > 0.001 ? 'improved' : delta < -0.001 ? 'regressed' : 'unchanged')
-                    const statusColor = status === 'improved' ? '#10b981' : status === 'regressed' ? '#ef4444' : '#ffffff40'
-                    const barMax = Math.max(before, after, 0.01)
-                    return (
-                      <div key={i} className="flex items-center gap-4 py-2 border-b border-white/3 last:border-0">
-                        <div className="w-28 flex-shrink-0 text-xs font-mono text-white/70">{item.attribute}</div>
-                        <div className="flex-1 flex items-center gap-2">
-                          <div className="flex-1 relative h-2 rounded bg-white/5">
-                            <div className="absolute left-0 top-0 h-full rounded bg-white/20" style={{ width: `${(before / barMax) * 100}%` }} />
-                          </div>
-                          <span className="text-white/30 text-xs font-mono w-10 text-right">{before.toFixed(3)}</span>
-                        </div>
-                        <div className="text-white/20 text-xs">→</div>
-                        <div className="flex-1 flex items-center gap-2">
-                          <div className="flex-1 relative h-2 rounded bg-white/5">
-                            <div className="absolute left-0 top-0 h-full rounded" style={{ width: `${(after / barMax) * 100}%`, background: statusColor }} />
-                          </div>
-                          <span className="text-xs font-mono w-10 text-right" style={{ color: statusColor }}>{after.toFixed(3)}</span>
-                        </div>
-                        <div className="w-20 flex-shrink-0 text-right">
-                          <span className="text-xs font-mono px-2 py-0.5 rounded" style={{ background: statusColor + '20', color: statusColor }}>
-                            {status === 'improved' ? `−${delta.toFixed(3)}` : status === 'regressed' ? `+${Math.abs(delta).toFixed(3)}` : 'unchanged'}
-                          </span>
-                        </div>
-                      </div>
-                    )
-                  })}
                 </div>
-              </div>
-            )}
+              )
+            })()}
 
             {/* Use the improved model */}
             <div className="glass rounded-2xl p-5 border border-white/5 mb-6">
               <div className="text-xs font-mono text-white/30 uppercase tracking-wider mb-3">Use the Improved Model</div>
-              <p className="text-white/60 text-sm mb-4">
-                {modelArtifact?.message || 'No patched model artifact was generated for this run.'}
+              <p className="text-white/50 text-xs font-mono mb-4">
+                {modelArtifact?.available
+                  ? 'The patched model includes per-group correction factors applied automatically at prediction time.'
+                  : (modelArtifact?.message || 'No patched model artifact was generated for this run.')}
               </p>
-              {modelArtifact?.available && (
-                <div className="space-y-4">
+              {modelArtifact?.available ? (
+                <div className="space-y-3">
                   <button onClick={downloadPatchedModel}
-                    className="px-5 py-2.5 rounded-xl bg-signal-green hover:bg-signal-green/90 text-white font-display font-semibold text-sm transition-all">
-                    ↓ Download Remediated Model (.pkl)
+                    className="w-full py-2.5 rounded-xl bg-signal-green hover:bg-signal-green/90 text-white font-display font-semibold text-sm transition-all flex items-center justify-center gap-2">
+                    <span>↓</span> Download Remediated Model (.pkl)
                   </button>
-                  <div className="text-xs font-mono text-white/30 space-y-1 mt-2">
-                    <div className="text-white/50 mb-1">How to use:</div>
-                    <div>1. Load the .pkl file with <span className="text-lens-light">joblib.load()</span> or <span className="text-lens-light">pickle.load()</span></div>
-                    <div>2. The model includes per-group correction factors applied at prediction time</div>
-                    <div>3. Use <span className="text-lens-light">model.predict(X)</span> as normal — fairness corrections are automatic</div>
-                    <div>4. Re-run FairLens on the remediated model to verify compliance</div>
+                  <div className="text-xs font-mono text-white/30 space-y-1 bg-white/3 rounded-xl p-3 border border-white/5">
+                    <div className="text-white/40 mb-1.5">How to use:</div>
+                    <div>1. <span className="text-lens-light">joblib.load('fairlens-remediated-model.pkl')</span></div>
+                    <div>2. <span className="text-lens-light">model.predict(X)</span> — corrections automatic</div>
                   </div>
                 </div>
-              )}
-              {!modelArtifact?.available && report.mitigation_plan?.length > 0 && (
-                <div className="text-xs font-mono text-white/30 space-y-1">
-                  <div className="text-white/50 mb-1">Correction factors applied at inference time:</div>
-                  {(report.mitigation_plan || []).map((item: any, i: number) => (
-                    <div key={i}>• <span className="text-lens-light">{item.attribute}</span>: {item.strategy?.replace(/_/g, ' ')}</div>
-                  ))}
-                </div>
+              ) : (
+                report.mitigation_plan?.length > 0 && (
+                  <div className="text-xs font-mono text-white/30 space-y-1.5">
+                    <div className="text-white/40 mb-2">Mitigation measures to implement:</div>
+                    {(report.mitigation_plan || []).map((item: any, i: number) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <span className="text-lens-light">•</span>
+                        <span><span className="text-white/60">{item.attribute}</span>: {item.strategy?.replace(/_/g, ' ')} — {item.rationale}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
               )}
             </div>
 
