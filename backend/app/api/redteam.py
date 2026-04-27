@@ -156,17 +156,33 @@ async def run_redteam(
     audit_id = str(uuid.uuid4())[:8]
 
     def _safe_json(obj):
+        import math
+
+        def _sanitize(o):
+            """Recursively replace NaN/Infinity with None so json.dumps produces valid JSON."""
+            if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
+                return None
+            if isinstance(o, dict):
+                return {k: _sanitize(v) for k, v in o.items()}
+            if isinstance(o, list):
+                return [_sanitize(v) for v in o]
+            return o
+
         def default(o):
             if isinstance(o, np.integer):
                 return int(o)
             if isinstance(o, np.floating):
-                return float(o)
+                f = float(o)
+                if math.isnan(f) or math.isinf(f):
+                    return None
+                return f
             if isinstance(o, np.ndarray):
                 return o.tolist()
             if isinstance(o, pd.DataFrame):
                 return f"<DataFrame {o.shape}>"
             return str(o)
-        return json.dumps(obj, default=default)
+
+        return json.dumps(_sanitize(obj), default=default)
 
     stop_event = threading.Event()
 
