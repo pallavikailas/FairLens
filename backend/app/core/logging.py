@@ -1,4 +1,4 @@
-"""Structured logging — JSON format for Cloud Logging compatibility."""
+"""Structured logging — plaintext format for stdout / Cloud Logging compatibility."""
 import logging, json, sys
 
 def setup_logging():

@@ -2,12 +2,16 @@
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import Optional
+import math
 import pandas as pd
 import numpy as np
 import pickle, io, uuid, json, asyncio, logging, threading
 
 from app.services.dataset_loader import load_dataset_csv
 from app.api._utils import resolve_feature_cols
+from app.services.redteam import redteam_agent
+from app.services.auto_detect import auto_detect_columns
+from app.services.model_adapter import FairLensAdapter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,10 +39,6 @@ async def run_redteam(
     Runs the red-team agent and streams progress as Server-Sent Events.
     Accepts pkl models, HuggingFace, OpenAI, Gemini, and REST API endpoints.
     """
-    from app.services.redteam import redteam_agent
-    from app.services.auto_detect import auto_detect_columns
-    from app.services.model_adapter import FairLensAdapter
-
     model = None
 
     # Load model based on type
@@ -156,8 +156,6 @@ async def run_redteam(
     audit_id = str(uuid.uuid4())[:8]
 
     def _safe_json(obj):
-        import math
-
         def _sanitize(o):
             """Recursively replace NaN/Infinity with None so json.dumps produces valid JSON."""
             if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):

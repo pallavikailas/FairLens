@@ -61,6 +61,7 @@ class ModelBiasProbe:
         logger.info(f"[{audit_id}] Starting model bias probe with embedded reference dataset")
 
         # ── 1. Build probe dataset ────────────────────────────────────────────
+        model_predict_cols = None
         if _uses_text_reference_probe(model):
             ref_df, ref_csv = generate_text_reference_dataset()
             probe_protected = REFERENCE_PROTECTED_COLS
@@ -230,105 +231,6 @@ class ModelBiasProbe:
                             return found
 
         return None
-
-    @staticmethod
-    def _calibrate_probe(model, feature_cols, probe_protected, original_ref_df, probe_target):
-        """
-        Try progressively different input distributions until predictions are mixed (5–95%).
-        Returns (ref_df, ref_csv, X_ref, predictions) on success, or None on failure.
-        """
-        rng = np.random.default_rng(0)
-        n = 240
-
-        # ── Feature-specific heuristic ranges ────────────────────────────────
-        def _heuristic_range(feat):
-            fl = feat.lower()
-            if any(k in fl for k in ("temp", "celsius", "fahrenheit")):   return (0.0, 45.0)
-            if any(k in fl for k in ("humid", "moisture", "saturation")): return (0.0, 100.0)
-            if any(k in fl for k in ("rain", "precipitation")):           return (0.0, 400.0)
-            if any(k in fl for k in ("ph", "acidity")):                   return (3.5, 9.5)
-            if any(k in fl for k in ("wind", "speed", "velocity")):       return (0.0, 120.0)
-            if any(k in fl for k in ("sun", "light", "solar", "hour")):   return (0.0, 14.0)
-            if any(k in fl for k in ("diversity", "index", "ratio")):     return (0.0, 1.0)
-            if any(k in fl for k in ("stage", "growth", "phase")):        return (1.0, 6.0)
-            if any(k in fl for k in ("type", "class", "category")):       return (0.0, 8.0)
-            if any(k in fl for k in ("score", "credit", "fico")):         return (300.0, 850.0)
-            if any(k in fl for k in ("income", "salary", "wage")):        return (20_000.0, 200_000.0)
-            if any(k in fl for k in ("age",)):                            return (18.0, 80.0)
-            return None  # no heuristic — fall back to distribution-level ranges
-
-        # Distributions to try in order
-        DISTS: List[Dict[str, tuple]] = [
-            # 1. Feature-specific heuristic
-            {f: (_heuristic_range(f) or (0.0, 100.0)) for f in feature_cols},
-            # 2. Normalised 0-1
-            {f: (0.0, 1.0)    for f in feature_cols},
-            # 3. Small integers
-            {f: (0.0, 10.0)   for f in feature_cols},
-            # 4. Wide
-            {f: (0.0, 1000.0) for f in feature_cols},
-            # 5. Signed normalised
-            {f: (-1.0, 1.0)   for f in feature_cols},
-            # 6. Very wide
-            {f: (0.0, 10_000.0) for f in feature_cols},
-        ]
-
-        best_X, best_full, best_preds, best_dist = None, None, None, 1.0
-
-        for ranges in DISTS:
-            data = {f: rng.uniform(lo, hi, n) for f, (lo, hi) in ranges.items()}
-            X = pd.DataFrame(data)
-            try:
-                preds = [int(p) for p in model.predict(X)]
-                pr = sum(preds) / len(preds)
-                if abs(pr - 0.5) < best_dist:
-                    best_dist = abs(pr - 0.5)
-                    best_X = X
-                    best_preds = preds
-                    if best_dist < 0.45:      # pos_rate 5–95% → good enough
-                        break
-            except Exception:
-                continue
-
-        # ── Mixing strategy: half min-values, half max-values ─────────────────
-        if best_dist >= 0.45:
-            for lo_scale, hi_scale in [(0.0, 1e4), (0.0, 1e6), (-1e4, 1e4)]:
-                n2 = n // 2
-                Xlo = pd.DataFrame({f: rng.uniform(lo_scale, lo_scale + 0.01 * abs(hi_scale - lo_scale), n2) for f in feature_cols})
-                Xhi = pd.DataFrame({f: rng.uniform(hi_scale * 0.9, hi_scale, n2)                             for f in feature_cols})
-                try:
-                    pl = [int(p) for p in model.predict(Xlo)]
-                    ph = [int(p) for p in model.predict(Xhi)]
-                    combined = pl + ph
-                    pr = sum(combined) / len(combined)
-                    if abs(pr - 0.5) < best_dist:
-                        best_dist  = abs(pr - 0.5)
-                        best_X     = pd.concat([Xlo, Xhi], ignore_index=True)
-                        best_preds = combined
-                        if best_dist < 0.45:
-                            break
-                except Exception:
-                    continue
-
-        if best_X is None or best_dist >= 0.47:
-            return None  # give up
-
-        # Re-attach demographic cols and probe target to build full ref_df
-        full = best_X.copy()
-        for col in probe_protected:
-            if col in original_ref_df.columns and col not in full.columns:
-                full[col] = original_ref_df[col].values[:len(full)]
-        # Inject standard demographics if none present
-        demo_needed = [c for c in ("gender", "race", "age_group") if c not in full.columns]
-        if demo_needed:
-            full["gender"]    = rng.choice(["Male", "Female", "Non-binary"], len(full))
-            full["race"]      = rng.choice(["White", "Black", "Hispanic", "Asian", "Other"], len(full))
-            full["age_group"] = rng.choice(["18-30", "31-45", "46-60", "60+"], len(full))
-
-        # Use model predictions as the probe target
-        full[probe_target] = best_preds
-        ref_csv = full.to_csv(index=False)
-        return full, ref_csv, best_X, best_preds
 
     @staticmethod
     def _extract_model_biases(carto: Dict, constitution: Dict) -> List[Dict]:

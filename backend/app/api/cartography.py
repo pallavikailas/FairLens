@@ -10,12 +10,11 @@ from app.services.cartography import cartography_service
 from app.services.auto_detect import auto_detect_columns
 from app.services.dataset_loader import load_dataset_csv
 from app.services.compliance_mapper import check_compliance
+from app.services.model_adapter import FairLensAdapter
 from app.api._utils import resolve_feature_cols
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
 
 
 @router.post("/analyze")
@@ -99,7 +98,6 @@ async def analyze_bias_cartography(
 
         elif model_type == "huggingface" and api_endpoint:
             try:
-                from app.services.model_adapter import FairLensAdapter
                 adapter = FairLensAdapter.from_huggingface_auto(api_endpoint, hf_token=hf_token)
                 df_pred = pd.read_csv(io.StringIO(dataset_csv))
                 if "text" not in df_pred.columns:
@@ -118,7 +116,6 @@ async def analyze_bias_cartography(
 
         elif model_type in ("openai", "gemini_llm") and api_endpoint:
             try:
-                from app.services.model_adapter import FairLensAdapter
                 adapter = (
                     FairLensAdapter.from_openai(model_name=api_endpoint, api_key=llm_api_key)
                     if model_type == "openai"
@@ -137,7 +134,6 @@ async def analyze_bias_cartography(
 
         elif model_type == "api" and api_endpoint:
             try:
-                from app.services.model_adapter import FairLensAdapter
                 adapter = FairLensAdapter.from_api(api_endpoint)
                 df_pred = pd.read_csv(io.StringIO(dataset_csv))
                 feature_cols_pred = [c for c in df_pred.columns if c != target]

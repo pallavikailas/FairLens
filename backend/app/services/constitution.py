@@ -171,7 +171,8 @@ class CounterfactualConstitutionService:
                 continue
 
             flip_rate = sum(1 for p in col_pairs if p["decision_flipped"]) / max(len(col_pairs), 1)
-            avg_prob_delta = np.mean([abs(p["prob_delta"]) for p in col_pairs if p["prob_delta"] is not None])
+            prob_deltas = [abs(p["prob_delta"]) for p in col_pairs if p["prob_delta"] is not None]
+            avg_prob_delta = np.mean(prob_deltas) if prob_deltas else 0.0
 
             # Direction of bias: which value benefits?
             value_flip_rates = {}

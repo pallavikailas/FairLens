@@ -106,7 +106,6 @@ REGULATIONS = [
 def _verdict(violations: list[str]) -> str:
     if not violations:
         return "PASS"
-    # Caution if only barely over one threshold, FAIL if clearly over
     return "FAIL"
 
 

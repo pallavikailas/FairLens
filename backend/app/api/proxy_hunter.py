@@ -5,6 +5,8 @@ from typing import Optional
 import pandas as pd, io, uuid
 
 from app.services.dataset_loader import load_dataset_csv
+from app.services.proxy_hunter import proxy_hunter_service
+from app.services.auto_detect import auto_detect_columns
 
 router = APIRouter()
 
@@ -17,8 +19,6 @@ async def hunt_proxies(
     dataset_source: str = Form(default="upload"),
     dataset_url: str = Form(default=""),
 ):
-    from app.services.proxy_hunter import proxy_hunter_service
-    from app.services.auto_detect import auto_detect_columns
 
     audit_id = str(uuid.uuid4())[:8]
     try:

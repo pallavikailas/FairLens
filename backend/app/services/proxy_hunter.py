@@ -226,7 +226,7 @@ class ProxyVariableHunter:
                         if min_weight > 0.01:
                             chains.append({
                                 "start_feature": source,
-                                "target_protected": protected,
+                                "protected_attribute": protected,
                                 "path": path,
                                 "path_length": len(path) - 1,
                                 "chain_strength": round(min_weight, 4),
@@ -286,7 +286,7 @@ class ProxyVariableHunter:
 
             path_str = " → ".join(chain["path"])
             explanation = (
-                f"'{feat}' is a {risk_level}-risk proxy for '{chain['target_protected']}' "
+                f"'{feat}' is a {risk_level}-risk proxy for '{chain['protected_attribute']}' "
                 f"via: {path_str}. "
                 f"Correlation with protected attribute: {prot_corr:.1%}; "
                 f"with target outcome: {max(target_corr, mi):.1%}."
@@ -331,7 +331,7 @@ class ProxyVariableHunter:
 
     def _recommend_action(self, chain: Dict) -> str:
         feat = chain["start_feature"]
-        prot = chain["target_protected"]
+        prot = chain["protected_attribute"]
         target_corr = chain.get("corr_with_target", 0)
         if chain["path_length"] == 1:
             if target_corr > 0.3:
@@ -368,7 +368,7 @@ class ProxyVariableHunter:
         top = risk_scored[:8]
         summary_json = json.dumps([{
             "feature": c["start_feature"],
-            "protected": c["target_protected"],
+            "protected": c["protected_attribute"],
             "risk_level": c["risk_level"],
             "path": " → ".join(c["path"]),
             "corr_with_protected": c["corr_with_protected"],

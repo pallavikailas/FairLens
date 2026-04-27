@@ -9,11 +9,11 @@ import pickle, io, uuid, json, asyncio, logging
 from app.services.constitution import constitution_service
 from app.services.auto_detect import auto_detect_columns
 from app.services.dataset_loader import load_dataset_csv
+from app.services.model_adapter import FairLensAdapter
 from app.api._utils import resolve_feature_cols
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
 
 
 @router.post("/generate")
@@ -69,12 +69,10 @@ async def generate_constitution(
                     except Exception as e:
                         raise HTTPException(400, f"Failed to load model file: {e}")
                 # Always wrap raw models so predict auto-encodes categoricals consistently
-                from app.services.model_adapter import FairLensAdapter
                 model = FairLensAdapter.auto_detect(raw)
 
         elif model_type == "huggingface" and api_endpoint:
             try:
-                from app.services.model_adapter import FairLensAdapter
                 model = FairLensAdapter.from_huggingface_auto(api_endpoint, hf_token=hf_token)
                 # HuggingFaceAdapter._to_text auto-serialises tabular rows when no 'text' column present
             except Exception as e:
@@ -87,28 +85,24 @@ async def generate_constitution(
 
         elif model_type == "api" and api_endpoint:
             try:
-                from app.services.model_adapter import FairLensAdapter
                 model = FairLensAdapter.from_api(api_endpoint)
             except Exception as e:
                 raise HTTPException(400, f"Failed to connect to API model '{api_endpoint}': {e}")
 
         elif model_type == "llm_hf" and api_endpoint:
             try:
-                from app.services.model_adapter import FairLensAdapter
                 model = FairLensAdapter.from_generative_huggingface(api_endpoint, hf_token=hf_token)
             except Exception as e:
                 raise HTTPException(400, f"Failed to load HuggingFace generative model '{api_endpoint}': {e}")
 
         elif model_type == "openai" and api_endpoint:
             try:
-                from app.services.model_adapter import FairLensAdapter
                 model = FairLensAdapter.from_openai(model_name=api_endpoint, api_key=llm_api_key)
             except Exception as e:
                 raise HTTPException(400, f"Failed to initialise OpenAI model '{api_endpoint}': {e}")
 
         elif model_type == "gemini_llm" and api_endpoint:
             try:
-                from app.services.model_adapter import FairLensAdapter
                 model = FairLensAdapter.from_gemini(model_name=api_endpoint, api_key=llm_api_key)
             except Exception as e:
                 raise HTTPException(400, f"Failed to initialise Gemini model '{api_endpoint}': {e}")
