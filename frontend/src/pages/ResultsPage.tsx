@@ -44,22 +44,37 @@ function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
 
     // ── Scales ────────────────────────────────────────────────────────────
     const xVals = points.map((d: any) => d.x)
-    const xMax  = Math.max(Math.abs(d3.min(xVals) as number), Math.abs(d3.max(xVals) as number), 0.05)
+    // Always show at least ±0.25 on x so threshold lines and safe zone are readable
+    const xMax  = Math.max(Math.abs(d3.min(xVals) as number), Math.abs(d3.max(xVals) as number), 0.2)
     const xScale = d3.scaleLinear().domain([-xMax * 1.25, xMax * 1.25]).range([0, w])
 
-    // Y: clip to actual data range with 15% padding — don't waste space on [0,1]
+    // Y: clip to actual data range with padding, minimum range of 0.3 for readability
     const yVals   = points.map((d: any) => d.y)
-    const yMin    = (d3.min(yVals) as number) - 0.08
-    const yMax    = (d3.max(yVals) as number) + 0.08
-    const yScale  = d3.scaleLinear().domain([Math.max(0, yMin), Math.min(1, yMax)]).range([h, 0])
+    const yDataMin = d3.min(yVals) as number
+    const yDataMax = d3.max(yVals) as number
+    const yPad    = Math.max(0.08, (yDataMax - yDataMin) * 0.3)
+    const yMin    = Math.max(0, yDataMin - yPad)
+    const yMax    = Math.min(1, yDataMax + yPad)
+    const yScale  = d3.scaleLinear().domain([yMin, yMax]).range([h, 0])
 
     const maxSz   = d3.max(points, (d: any) => d.size as number) as number || 1
-    const rScale  = d3.scaleSqrt().domain([0, maxSz]).range([4, 16])
+    const rScale  = d3.scaleSqrt().domain([0, maxSz]).range([5, 18])
 
     // ── Per-attribute color index ─────────────────────────────────────────
     const allAttrs   = [...new Set(points.map((d: any) => (d.attribute || '').split('+')[0].trim()))]
     const attrIdx    = Object.fromEntries(allAttrs.map((a: string, i: number) => [a, i]))
     const colorOf    = (d: any) => attrColor((d.attribute || '').split('+')[0].trim(), attrIdx[(d.attribute || '').split('+')[0].trim()] ?? 0)
+
+    // ── Deterministic jitter to separate overlapping points ───────────────
+    // Hash the slice label to get a stable per-point offset so points at the
+    // same (x, y) are spread slightly apart instead of stacking invisibly.
+    const jitter = (label: string, axis: 'x' | 'y'): number => {
+      let h = 0
+      for (let i = 0; i < label.length; i++) h = (Math.imul(31, h) + label.charCodeAt(i)) | 0
+      const seed = axis === 'x' ? h : (h >> 8)
+      // ±4 px spread
+      return ((seed & 0xff) / 255 - 0.5) * 8
+    }
 
     // ── Background quadrant shading ───────────────────────────────────────
     const threshold = 0.1
@@ -180,9 +195,9 @@ function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
     g.selectAll('circle.pt')
       .data(singlePoints)
       .join('circle').attr('class', 'pt')
-      .attr('cx', (d: any) => xScale(d.x))
-      .attr('cy', (d: any) => yScale(d.y))
-      .attr('r',  (d: any) => Math.max(5, rScale(d.size || 1)))
+      .attr('cx', (d: any) => xScale(d.x) + jitter(d.slice_label, 'x'))
+      .attr('cy', (d: any) => yScale(d.y) + jitter(d.slice_label, 'y'))
+      .attr('r',  (d: any) => Math.max(6, rScale(d.size || 1)))
       .attr('fill',         (d: any) => colorOf(d))
       .attr('fill-opacity', (d: any) => d.flagged ? 0.9 : 0.45)
       .attr('stroke',       (d: any) => d.flagged ? '#ffffff' : colorOf(d))
@@ -207,16 +222,23 @@ function BiasMap({ points, hotspots }: { points: any[]; hotspots: any[] }) {
         tooltip.style('opacity', '0')
       })
 
-    // ── Labels for flagged single-attribute points ────────────────────────
-    singlePoints.filter((d: any) => d.flagged).forEach((d: any) => {
-      const cx = xScale(d.x)
-      const cy = yScale(d.y)
+    // ── Labels for all single-attribute points ───────────────────────────
+    // Flagged points get bold colored labels; non-flagged get subtle grey labels.
+    singlePoints.forEach((d: any) => {
+      const cx = xScale(d.x) + jitter(d.slice_label, 'x')
+      const cy = yScale(d.y) + jitter(d.slice_label, 'y')
       if (cx < 0 || cx > w || cy < 0 || cy > h) return
-      const shortLabel = d.slice_label.replace(/^.*?=/, '').slice(0, 14)
-      g.append('text').attr('x', cx).attr('y', cy - rScale(d.size || 1) - 5)
-        .attr('text-anchor', 'middle').attr('fill', colorOf(d))
-        .attr('font-size', 8).attr('font-family', 'JetBrains Mono, monospace')
-        .attr('font-weight', 'bold').text(shortLabel)
+      const r = Math.max(6, rScale(d.size || 1))
+      const shortLabel = d.slice_label.replace(/^.*?=/, '').slice(0, 12)
+      g.append('text')
+        .attr('x', cx)
+        .attr('y', cy - r - 4)
+        .attr('text-anchor', 'middle')
+        .attr('fill', d.flagged ? colorOf(d) : 'rgba(255,255,255,0.35)')
+        .attr('font-size', d.flagged ? 8.5 : 7.5)
+        .attr('font-family', 'JetBrains Mono, monospace')
+        .attr('font-weight', d.flagged ? 'bold' : 'normal')
+        .text(shortLabel)
     })
 
     // ── Legend (right side — one row per unique attribute) ─────────────────
