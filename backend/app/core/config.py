@@ -35,6 +35,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "https://fairlens.web.app",
         "https://fairlens-frontend-nrk2z2yadq-uc.a.run.app",
+        "https://pallavikailas.github.io",
     ]
 
     class Config:
