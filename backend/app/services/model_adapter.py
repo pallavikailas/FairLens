@@ -634,9 +634,29 @@ class GenerativeLLMAdapter(BaseModelAdapter):
 
     def _query_gemini(self, prompt: str) -> float:
         from google import genai
+        from google.genai import types
         client = genai.Client(api_key=self.api_key)
-        resp = client.models.generate_content(model=self.model_name, contents=prompt)
-        return self._parse_response(resp.text or "")
+        gen_config = types.GenerateContentConfig(
+            temperature=0,
+            max_output_tokens=20,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
+        resp = client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=gen_config,
+        )
+        text = ""
+        try:
+            text = resp.text or ""
+        except Exception:
+            for cand in (resp.candidates or []):
+                for part in (getattr(getattr(cand, "content", None), "parts", None) or []):
+                    t = getattr(part, "text", None)
+                    if t:
+                        text = t
+                        break
+        return self._parse_response(text)
 
 
 # ── REST API adapter ──────────────────────────────────────────────────────────
